@@ -6,9 +6,12 @@ import axios from 'axios';
 import { GoogleGenerativeAI } from "@google/generative-ai";  // Import Gemini API
 import * as Location from 'expo-location';
 import {GEMINI_API_KEY, ASSEMBLY_AI_API_KEY} from "@env";  // Import API keys from .env file
+import { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } from '@env';
+import { createClient } from '@supabase/supabase-js/dist/module/index';
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const supabase = createClient(NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
 const transcribeAudio = async (fileUri) => {
   try {
@@ -164,16 +167,45 @@ Important:
     try {
       const jsonResponse = JSON.parse(analysis);
       console.log("Parsed JSON response:", jsonResponse);
-      Alert.alert("Analysis Complete", JSON.stringify(jsonResponse, null, 2));
+      
+      // Save to Supabase
+      const { data, error } = await supabase
+        .from('alerts')
+        .insert([
+          {
+            patient_name: jsonResponse["Patient Name"] || 'Unknown',
+            incident_location: jsonResponse["Address or location of the incident"] || 'Unknown',
+            latitude: location?.latitude || 0,
+            longitude: location?.longitude || 0,
+            incident_type: jsonResponse["Type of incident"] || 'Unknown',
+            medical_conditions: jsonResponse["Medical conditions mentioned"] || 'None reported',
+            priority_status: jsonResponse["Priority status"] || 'Low',
+            priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided'
+          }
+        ])
+        .select();
+
+      if (error) {
+        console.error("Error saving to Supabase:", error);
+        Alert.alert("Error", "Failed to save alert to database");
+        return;
+      }
+
+      console.log("Successfully saved to Supabase:", data);
+      Alert.alert(
+        "Alert Saved", 
+        `Emergency alert has been recorded with priority: ${jsonResponse["Priority status"]}`
+      );
+
     } catch (e) {
-      console.error("Failed to parse JSON:", e);
+      console.error("Failed to parse JSON or save to database:", e);
       console.error("Response content:", analysis);
-      Alert.alert("Error", "Failed to parse analysis response");
+      Alert.alert("Error", "Failed to process and save alert");
     }
 
   } catch (error) {
-    console.error("Error analyzing with Gemini:", error);
-    Alert.alert("Error", "Failed to analyze with Gemini");
+    console.error("Error in analyzeWithGemini:", error);
+    Alert.alert("Error", "Failed to analyze and save alert");
   }
 };
 
