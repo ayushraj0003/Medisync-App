@@ -4,9 +4,8 @@ import { Audio } from "expo-av";
 import * as FileSystem from 'expo-file-system';
 import axios from 'axios';
 import { GoogleGenerativeAI } from "@google/generative-ai";  // Import Gemini API
-
-const ASSEMBLY_AI_API_KEY = "";
-const GEMINI_API_KEY = "";  // Replace with your actual Gemini API key
+import * as Location from 'expo-location';
+import {GEMINI_API_KEY, ASSEMBLY_AI_API_KEY} from "@env";  // Import API keys from .env file
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -30,7 +29,7 @@ const transcribeAudio = async (fileUri) => {
     }
 
     const uploadData = await uploadResponse.json();
-    
+
     const transcriptionResponse = await axios.post(
       "https://api.assemblyai.com/v2/transcript",
       { 
@@ -51,6 +50,7 @@ const transcribeAudio = async (fileUri) => {
   }
 };
 
+
 const checkTranscriptionStatus = async (transcriptId) => {
   try {
     const response = await axios.get(
@@ -63,15 +63,21 @@ const checkTranscriptionStatus = async (transcriptId) => {
     const { status, text } = response.data;
 
     if (status === "completed") {
-      Alert.alert("Transcription Complete", text);
       console.log("Transcribed Text:", text);
+      Alert.alert("Transcription Complete", text);
 
-      // Send the transcribed text to Gemini for extracting patient details
-      await analyzeWithGemini(text);
+      // Fetch real-time location before sending to Gemini
+      const location = await getUserLocation();  
+      console.log("Raw location data:", location);
+      if (!location) {
+        Alert.alert("Location Unavailable", "Could not fetch location.");
+      }
+
+      console.log("Location fetched:", location); // Debugging line
+      await analyzeWithGemini(text, location);
     } else if (status === "error") {
       Alert.alert("Error", response.data.error);
     } else {
-      // Continue polling if not complete
       setTimeout(() => checkTranscriptionStatus(transcriptId), 3000);
     }
   } catch (error) {
@@ -79,38 +85,92 @@ const checkTranscriptionStatus = async (transcriptId) => {
   }
 };
 
-// Function to analyze transcription with Gemini
-const analyzeWithGemini = async (transcription) => {
+const getUserLocation = async () => {
   try {
-    const prompt = `
-  The following message is an emergency SOS call. Please carefully analyze and extract the following information:
-  
-  1. **Patient Name** (if mentioned)
-  2. **Address or location** of the incident
-  3. **Type of incident** (e.g., accident, fire, medical emergency, etc.)
-  4. **Medical conditions** mentioned, if any
-  5. **Priority status** (High, Medium, Low) based on urgency
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Please enable location services.");
+      return null;
+    }
 
-  Respond in the following JSON format:
-  {
-    "Patient Name": "",
-    "Address or location of the incident": "",
-    "Type of incident": "",
-    "Medical conditions mentioned": "",
-    "Priority status": ""
+    const location = await Location.getCurrentPositionAsync({});
+    console.log("Raw location data:", location); // Debug raw location
+    
+    const locationData = {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    };
+    console.log("Formatted location data:", locationData); // Debug formatted location
+    
+    return locationData;
+  } catch (error) {
+    console.error("Error fetching location:", error);
+    return null;
   }
+};
+// Function to analyze transcription with Gemini
+const analyzeWithGemini = async (transcription, location) => {
+  try {
+    // Verify location data
+    if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+      console.warn('Invalid or missing location data:', location);
+      location = null;
+    }
 
-  SOS Message: "${transcription}"
-  
-  Only include the fields that can be confidently extracted based on the message.
+    // Create a JSON structure that will be part of the prompt
+    const exampleJson = {
+      "Patient Name": "Extracted Name or null",
+      "Address or location of the incident": "Extracted Location or null",
+      "Latitude": location ? location.latitude : null,
+      "Longitude": location ? location.longitude : null,
+      "Type of incident": "Accident / Medical / Fire / Other",
+      "Medical conditions mentioned": "List any conditions mentioned",
+      "Priority status": "High / Medium / Low",
+      "Reason for priority status": "Explain why this category was assigned"
+    };
+
+    const prompt = `
+The following message is an emergency SOS call. Extract critical information and categorize the priority level based on urgency.
+
+### **Priority Criteria:**
+- **High:** Immediate danger to life (e.g., cardiac arrest, severe bleeding, unconsciousness, stroke, difficulty breathing, major accidents, severe burns).
+- **Medium:** Urgent but not life-threatening (e.g., broken bones, moderate burns, difficulty moving, high fever, allergic reaction without airway blockage).
+- **Low:** Non-urgent (e.g., minor cuts, stable condition, mild pain, general health consultation, transport requests).
+
+### **Required Information Extraction:**
+Respond with ONLY the JSON object, without any markdown formatting or code blocks. Use this exact structure:
+
+${JSON.stringify(exampleJson, null, 2)}
+
+**SOS Message:**  
+"${transcription}"
+
+Important: 
+- Use the exact latitude (${location ? location.latitude : 'null'}) and longitude (${location ? location.longitude : 'null'}) provided.
+- Return ONLY the JSON object without any markdown formatting, code blocks, or additional text.
+- If any information is missing, use "null" for that field.
 `;
 
+    console.log("Sending prompt with location:", location);
 
     const result = await model.generateContent(prompt);
-    const analysis = result.response.text();
+    let analysis = result.response.text();
 
-    console.log("Gemini Analysis:", analysis);
-    Alert.alert("Analysis Complete", analysis);
+    // Clean the response by removing markdown code blocks and any extra whitespace
+    analysis = analysis.replace(/```json\n?|\n?```/g, '').trim();
+    
+    console.log("Cleaned response:", analysis);
+
+    try {
+      const jsonResponse = JSON.parse(analysis);
+      console.log("Parsed JSON response:", jsonResponse);
+      Alert.alert("Analysis Complete", JSON.stringify(jsonResponse, null, 2));
+    } catch (e) {
+      console.error("Failed to parse JSON:", e);
+      console.error("Response content:", analysis);
+      Alert.alert("Error", "Failed to parse analysis response");
+    }
+
   } catch (error) {
     console.error("Error analyzing with Gemini:", error);
     Alert.alert("Error", "Failed to analyze with Gemini");
