@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import SOSAudioRecorder from './src/Transcript';
 import MapScreen from './src/MapScreen'; // Make sure to create this file in src folder
+import AuthScreen from './src/auth';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -60,8 +61,13 @@ const App = () => {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen 
+          name="Auth" 
+          component={AuthScreen} 
+          options={{ title: 'Authentication' }} 
+        />
+        <Stack.Screen 
           name="MainTabs" 
-          component={TabNavigator}
+          component={TabNavigator} 
         />
       </Stack.Navigator>
     </NavigationContainer>
