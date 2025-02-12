@@ -6,12 +6,67 @@ import axios from 'axios';
 import { GoogleGenerativeAI } from "@google/generative-ai";  // Import Gemini API
 import * as Location from 'expo-location';
 import {GEMINI_API_KEY, ASSEMBLY_AI_API_KEY} from "@env";  // Import API keys from .env file
-import { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } from '@env';
-import { createClient } from '@supabase/supabase-js/dist/module/index';
 
+
+import { supabase } from './supabase'; // You'll need to create this
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-const supabase = createClient(NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY);
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return Number((R * c).toFixed(2)); // Distance in km, rounded to 2 decimal places
+};
+
+// Add this function before analyzeWithGemini
+const findNearbyHospitals = async (latitude, longitude) => {
+  try {
+    const { data: hospitals, error } = await supabase
+      .from('hospitals')
+      .select('name, latitude, longitude');
+
+    if (error) {
+      console.error("Error fetching hospitals:", error);
+      return;
+    }
+
+    console.log("\n=== Searching for hospitals near:", latitude, longitude, "===");
+
+    const nearbyHospitals = hospitals.filter(hospital => {
+      const distance = calculateDistance(
+        latitude,
+        longitude,
+        Number(hospital.latitude),
+        Number(hospital.longitude)
+      );
+      hospital.distance = distance;
+      return distance <= 5; // 5km radius
+    });
+
+    // Sort by distance and log
+    const sortedHospitals = nearbyHospitals.sort((a, b) => a.distance - b.distance);
+    
+    console.log("\n=== Nearby Hospitals (within 5km) ===");
+    if (sortedHospitals.length === 0) {
+      console.log("No hospitals found within 5km radius");
+    } else {
+      sortedHospitals.forEach(hospital => {
+        console.log(`${hospital.name} - ${hospital.distance}km away`);
+      });
+    }
+    console.log("=====================================\n");
+
+    return sortedHospitals;
+  } catch (error) {
+    console.error("Error in findNearbyHospitals:", error);
+    return [];
+  }
+};
 
 const transcribeAudio = async (fileUri) => {
   try {
@@ -192,9 +247,23 @@ Important:
       }
 
       console.log("Successfully saved to Supabase:", data);
+      const nearbyHospitals = await findNearbyHospitals(
+        location.latitude,
+        location.longitude
+      );
+  
+      // Create a message that includes both alert and hospital information
+      const alertMessage = `Emergency alert has been recorded with priority: ${jsonResponse["Priority status"]}\n\n${
+        nearbyHospitals.length > 0 
+          ? `Found ${nearbyHospitals.length} hospitals within 5km:\n${
+              nearbyHospitals.slice(0, 3).map(h => `- ${h.name} (${h.distance}km)`).join('\n')
+            }`
+          : 'No hospitals found within 5km radius'
+      }`;
+  
       Alert.alert(
         "Alert Saved", 
-        `Emergency alert has been recorded with priority: ${jsonResponse["Priority status"]}`
+        alertMessage
       );
 
     } catch (e) {
