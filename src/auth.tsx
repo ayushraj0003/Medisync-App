@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Text, View, TextInput, Button, StyleSheet, Alert } from 'react-native';
 import * as Location from 'expo-location';
-import { supabase } from './supabase'; // You'll need to create this
+import { supabase } from './supabase';
 import { Picker } from '@react-native-picker/picker';
 import { NavigationProp } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
+import { Platform } from 'react-native';
+import { registerForPushNotificationsAsync, updateHospitalPushToken } from './hospitalAlerts';
 
 type AuthMode = 'login' | 'signup';
 type AccountType = 'user' | 'hospital';
@@ -34,6 +38,46 @@ interface HospitalData {
   address: string;
   location?: LocationCoords;
 }
+
+// // Function to register for push notifications
+// const registerForPushNotificationsAsync = async () => {
+//   let token;
+  
+//   if (Device.isDevice) {
+//     const { status: existingStatus } = await Notifications.getPermissionsAsync();
+//     let finalStatus = existingStatus;
+    
+//     if (existingStatus !== 'granted') {
+//       const { status } = await Notifications.requestPermissionsAsync();
+//       finalStatus = status;
+//     }
+    
+//     if (finalStatus !== 'granted') {
+//       Alert.alert('Failed to get push token for push notification!');
+//       return null;
+//     }
+    
+//     token = (await Notifications.getExpoPushTokenAsync({
+//       projectId: Constants.expoConfig?.extra?.eas?.projectId,
+//     })).data;
+    
+//   } else {
+//     Alert.alert('Must use physical device for Push Notifications');
+//   }
+
+//   // For Android, we need to set up a notification channel
+//   if (Platform.OS === 'android') {
+//     Notifications.setNotificationChannelAsync('sos-alerts', {
+//       name: 'SOS Alerts',
+//       importance: Notifications.AndroidImportance.MAX,
+//       vibrationPattern: [0, 250, 250, 250],
+//       lightColor: '#FF0000',
+//       sound: true,
+//     });
+//   }
+
+//   return token;
+// };
 
 export default function AuthScreen({ navigation }: AuthScreenProps) {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
@@ -82,7 +126,7 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
       Alert.alert('Error', 'Unable to get location');
       return;
     }
-
+  
     try {
       let authResponse;
       
@@ -92,9 +136,9 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
           email: userData.email,
           password: userData.password,
         });
-
+  
         if (authResponse.error) throw authResponse.error;
-
+  
         // Then insert into users table using the auth id
         const { error: userError } = await supabase
           .from('users')
@@ -106,21 +150,22 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
             latitude: location.latitude,
             longitude: location.longitude,
           });
-
+  
         if (userError) {
-          // If user table insert fails, we should handle cleanup
-          // Ideally delete the auth user, but Supabase doesn't expose this API
           throw userError;
         }
       } else {
+        // For hospitals, register for push notifications first
+        const pushToken = await registerForPushNotificationsAsync();
+        
         // First create the auth user for hospital
         authResponse = await supabase.auth.signUp({
           email: hospitalData.email,
           password: hospitalData.password,
         });
-
+  
         if (authResponse.error) throw authResponse.error;
-
+  
         // Then insert into hospitals table using the auth id
         const { error: hospitalError } = await supabase
           .from('hospitals')
@@ -131,14 +176,18 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
             address: hospitalData.address,
             latitude: location.latitude,
             longitude: location.longitude,
+            push_token: pushToken || null, // Store the push token
           });
-
+  
         if (hospitalError) {
-          // If hospital table insert fails, we should handle cleanup
           throw hospitalError;
         }
+        
+        if (!pushToken) {
+          Alert.alert('Warning', 'Account created, but push notifications may not work. Please ensure you\'re using a physical device and have granted notification permissions.');
+        }
       }
-
+  
       Alert.alert('Success', 'Account created successfully! Please check your email for verification.');
       setAuthMode('login');
     } catch (error: any) {
@@ -152,9 +201,9 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
         email: accountType === 'user' ? userData.email : hospitalData.email,
         password: accountType === 'user' ? userData.password : hospitalData.password,
       });
-
+  
       if (error) throw error;
-
+  
       // After successful login, fetch additional details
       const table = accountType === 'user' ? 'users' : 'hospitals';
       const { data: profile, error: profileError } = await supabase
@@ -162,15 +211,25 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
         .select('*')
         .eq('id', data.user.id)
         .single();
-
+  
       if (profileError) throw profileError;
-
+  
+      // If it's a hospital account, ensure we have the latest push token
+      if (accountType === 'hospital') {
+        // Update the hospital's push token
+        const tokenResult = await updateHospitalPushToken(data.user.id);
+        
+        if (!tokenResult.success) {
+          console.warn('Failed to update push token:', tokenResult.message);
+        }
+      }
+  
       // Store the complete profile data
       await AsyncStorage.setItem('userProfile', JSON.stringify({
         ...profile,
         accountType
       }));
-
+  
       Alert.alert('Success', 'Login successful');
       navigation.navigate('MainTabs', { screen: 'SOS' });
     } catch (error: any) {

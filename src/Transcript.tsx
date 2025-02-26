@@ -6,7 +6,9 @@ import axios from 'axios';
 import { GoogleGenerativeAI } from "@google/generative-ai";  // Import Gemini API
 import * as Location from 'expo-location';
 import {GEMINI_API_KEY, ASSEMBLY_AI_API_KEY} from "@env";  // Import API keys from .env file
-
+import { sendSOSAlerts } from './hospitalAlerts';
+import { useNavigation } from "@react-navigation/native"; // Import for navigation
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { supabase } from './supabase'; // You'll need to create this
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -22,6 +24,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return Number((R * c).toFixed(2)); // Distance in km, rounded to 2 decimal places
 };
+
 
 // Add this function before analyzeWithGemini
 const findNearbyHospitals = async (latitude, longitude) => {
@@ -72,6 +75,9 @@ const transcribeAudio = async (fileUri) => {
   try {
     const response = await fetch(fileUri);
     const blob = await response.blob();
+
+    console.log("Supabase URL:", GEMINI_API_KEY);
+    console.log("Supabase Key:", ASSEMBLY_AI_API_KEY);
 
     const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
       method: 'POST',
@@ -188,26 +194,26 @@ const analyzeWithGemini = async (transcription, location) => {
     };
 
     const prompt = `
-The following message is an emergency SOS call. Extract critical information and categorize the priority level based on urgency.
+  The following message is an emergency SOS call. Extract critical information and categorize the priority level based on urgency.
 
-### **Priority Criteria:**
-- **High:** Immediate danger to life (e.g., cardiac arrest, severe bleeding, unconsciousness, stroke, difficulty breathing, major accidents, severe burns).
-- **Medium:** Urgent but not life-threatening (e.g., broken bones, moderate burns, difficulty moving, high fever, allergic reaction without airway blockage).
-- **Low:** Non-urgent (e.g., minor cuts, stable condition, mild pain, general health consultation, transport requests).
+  ### **Priority Criteria:**
+  - **High:** Immediate danger to life (e.g., cardiac arrest, severe bleeding, unconsciousness, stroke, difficulty breathing, major accidents, severe burns).
+  - **Medium:** Urgent but not life-threatening (e.g., broken bones, moderate burns, difficulty moving, high fever, allergic reaction without airway blockage).
+  - **Low:** Non-urgent (e.g., minor cuts, stable condition, mild pain, general health consultation, transport requests).
 
-### **Required Information Extraction:**
-Respond with ONLY the JSON object, without any markdown formatting or code blocks. Use this exact structure:
+  ### **Required Information Extraction:**
+  Respond with ONLY the JSON object, without any markdown formatting or code blocks. Use this exact structure:
 
-${JSON.stringify(exampleJson, null, 2)}
+  ${JSON.stringify(exampleJson, null, 2)}
 
-**SOS Message:**  
-"${transcription}"
+  **SOS Message:**  
+  "${transcription}"
 
-Important: 
-- Use the exact latitude (${location ? location.latitude : 'null'}) and longitude (${location ? location.longitude : 'null'}) provided.
-- Return ONLY the JSON object without any markdown formatting, code blocks, or additional text.
-- If any information is missing, use "null" for that field.
-`;
+  Important: 
+  - Use the exact latitude (${location ? location.latitude : 'null'}) and longitude (${location ? location.longitude : 'null'}) provided.
+  - Return ONLY the JSON object without any markdown formatting, code blocks, or additional text.
+  - If any information is missing, use "null" for that field.
+  `;
 
     console.log("Sending prompt with location:", location);
 
@@ -239,6 +245,18 @@ Important:
           }
         ])
         .select();
+
+        // After successfully saving to Supabase
+        await sendSOSAlerts({
+          patient_name: jsonResponse["Patient Name"] || 'Unknown',
+          incident_location: jsonResponse["Address or location of the incident"] || 'Unknown',
+          latitude: location?.latitude || 0,
+          longitude: location?.longitude || 0,
+          incident_type: jsonResponse["Type of incident"] || 'Unknown',
+          medical_conditions: jsonResponse["Medical conditions mentioned"] || 'None reported',
+          priority_status: jsonResponse["Priority status"] || 'Low',
+          priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided'
+        });
 
       if (error) {
         console.error("Error saving to Supabase:", error);
@@ -283,6 +301,7 @@ export default function ExpoAudioRecorder() {
   const [recordingStatus, setRecordingStatus] = useState("idle");
   const [audioPermission, setAudioPermission] = useState(false);
   const [recordingUri, setRecordingUri] = useState(null);
+  const navigation = useNavigation();
 
   useEffect(() => {
     const getPermission = async () => {
@@ -366,6 +385,48 @@ export default function ExpoAudioRecorder() {
     }
   };
 
+  // Function to handle logout
+  const handleLogout = async () => {
+    try {
+      // Confirm before logout
+      Alert.alert(
+        "Logout",
+        "Are you sure you want to logout?",
+        [
+          {
+            text: "Cancel",
+            style: "cancel"
+          },
+          {
+            text: "Logout",
+            onPress: async () => {
+              const { error } = await supabase.auth.signOut();
+              console.log("Sucess");
+              
+              if (error) {
+                console.error("Error signing out:", error);
+                Alert.alert("Error", "Failed to sign out");
+                return;
+              }
+              
+              // Clear local storage
+              await AsyncStorage.removeItem('userProfile');
+              
+              // Navigate to login screen
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'Auth' }],
+              });
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error("Logout error:", error);
+      Alert.alert("Error", "Failed to logout");
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.statusText}>Status: {recordingStatus}</Text>
@@ -377,6 +438,14 @@ export default function ExpoAudioRecorder() {
         <Text style={styles.buttonText}>
           {recordingStatus === "recording" ? "Stop Recording" : "Start Recording"}
         </Text>
+      </TouchableOpacity>
+      
+      {/* Logout Button */}
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={handleLogout}
+      >
+        <Text style={styles.buttonText}>Logout</Text>
       </TouchableOpacity>
     </View>
   );
@@ -401,9 +470,20 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 10,
     marginVertical: 10,
+    width: '80%',
+    alignItems: 'center',
   },
   recordingButton: {
     backgroundColor: '#FF3B30',
+  },
+  logoutButton: {
+    backgroundColor: '#FF9500',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 10,
+    marginTop: 20,
+    width: '80%',
+    alignItems: 'center',
   },
   buttonText: {
     color: 'white',

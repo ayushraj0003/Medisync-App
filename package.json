@@ -11,7 +11,9 @@
   "dependencies": {
     "@expo/vector-icons": "^14.0.4",
     "@google/generative-ai": "^0.21.0",
+    "@react-native-async-storage/async-storage": "1.23.1",
     "@react-native-masked-view/masked-view": "0.3.2",
+    "@react-native-picker/picker": "2.9.0",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
     "@react-navigation/native-stack": "^7.2.0",
@@ -19,17 +21,19 @@
     "axios": "^1.7.9",
     "expo": "~52.0.30",
     "expo-av": "~15.0.2",
+    "expo-device": "^7.0.2",
     "expo-file-system": "~18.0.10",
     "expo-location": "^18.0.6",
+    "expo-notifications": "^0.29.13",
+    "expo-router": "^4.0.17",
+    "expo-sms": "~13.0.1",
     "expo-status-bar": "~2.0.1",
     "react": "18.3.1",
     "react-native": "0.76.6",
     "react-native-dotenv": "^3.4.11",
     "react-native-maps": "^1.20.1",
     "react-native-safe-area-context": "4.12.0",
-    "react-native-screens": "~4.4.0",
-    "@react-native-picker/picker": "2.9.0",
-    "@react-native-async-storage/async-storage": "1.23.1"
+    "react-native-screens": "~4.4.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

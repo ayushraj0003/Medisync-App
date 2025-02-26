@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "medisync-app",
-    "slug": "medisync-app",
+    "slug": "medisync",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -45,11 +45,13 @@
         "RECORD_AUDIO",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
+        "ACCESS_BACKGROUND_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ],
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyAaRnCKVVSWGR159MyTF6rV7NMIPsW960c"
+          "apiKey": ""
         }
       }
     },
@@ -58,8 +60,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "your-project-id"
+        "projectId": "4faf99d3-698c-49b7-b84d-53ac51201a9f"
       }
-    }
+    },
+    "owner": "ayush03"
   }
 }
