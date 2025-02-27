@@ -231,7 +231,13 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
       }));
   
       Alert.alert('Success', 'Login successful');
-      navigation.navigate('MainTabs', { screen: 'SOS' });
+      
+      // Navigate to the appropriate tabs based on account type
+      if (accountType === 'hospital') {
+        navigation.replace('HospitalTabs');
+      } else {
+        navigation.replace('UserTabs');
+      }
     } catch (error: any) {
       Alert.alert('Error', error.message);
     }
