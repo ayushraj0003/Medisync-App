@@ -3,6 +3,51 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import { Platform, Alert } from 'react-native';
 import { supabase } from './supabase';
+import { useRef, useEffect } from 'react';
+import { useNavigation } from '@react-navigation/native';
+
+export const useNotificationHandler = () => {
+  const notificationListener = useRef();
+  const responseListener = useRef();
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    // Set up notification listeners when component mounts
+    
+    // This listener handles notifications received while the app is in the foreground
+    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+      // You can do something with notification shown in foreground if needed
+      console.log('Notification received in foreground:', notification);
+    });
+
+    // This listener handles the user tapping on a notification
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+      // Get the data from the notification
+      const data = response.notification.request.content.data;
+      
+      console.log('Notification tapped, data:', data);
+      
+      // Check if the notification contains location data
+      if (data && data.coordinates) {
+        const { latitude, longitude } = data.coordinates;
+        const patientName = data.patientName || 'Unknown';
+        
+        // Navigate to the Map screen with the alert location
+        navigation.navigate('Map', {
+          latitude,
+          longitude,
+          patientName
+        });
+      }
+    });
+
+    // Cleanup the listeners on unmount
+    return () => {
+      Notifications.removeNotificationSubscription(notificationListener.current);
+      Notifications.removeNotificationSubscription(responseListener.current);
+    };
+  }, [navigation]);
+};
 
 // Function to calculate distance between two coordinates
 const calculateDistance = (lat1, lon1, lat2, lon2) => {

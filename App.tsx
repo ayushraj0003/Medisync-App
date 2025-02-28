@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
 import SOSAudioRecorder from './src/Transcript';
 import MapScreen from './src/MapScreen';
 import HospitalDashboard from './src/HospitalDashboard';
 import AuthScreen from './src/auth';
 import { setupNotifications } from './src/hospitalAlerts';
 import { StatusBar } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -61,7 +61,6 @@ const UserTabNavigator = () => {
 };
 
 // Create a TabNavigator component for hospital bottom tabs
-// Create a TabNavigator component for hospital bottom tabs
 const HospitalTabNavigator = () => {
   return (
     <Tab.Navigator
@@ -79,9 +78,7 @@ const HospitalTabNavigator = () => {
         },
         tabBarActiveTintColor: '#FF3B30',
         tabBarInactiveTintColor: 'gray',
-        // Set headerShown to true to show the header
         headerShown: true,
-        // Default header styles that can be overridden by individual screens
         headerStyle: {
           backgroundColor: '#FF3B30',
         },
@@ -94,10 +91,9 @@ const HospitalTabNavigator = () => {
       <Tab.Screen 
         name="Dashboard" 
         component={HospitalDashboard}
-        options={({ navigation }) => ({
+        options={{
           title: 'Emergency Alerts',
-          // The individual screen will now control its own headerRight
-        })}
+        }}
       />
       <Tab.Screen 
         name="Map" 
@@ -111,11 +107,60 @@ const HospitalTabNavigator = () => {
 };
 
 const App = () => {
+  // Reference to navigation
+  const navigationRef = useRef(null);
+  const notificationListener = useRef();
+  const responseListener = useRef();
+
   // Initialize notifications when the app starts
   useEffect(() => {
     // Set up push notifications for hospitals
     setupNotifications();
     console.log('Notifications system initialized');
+
+    // This listener handles notifications received while the app is in the foreground
+    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Notification received in foreground:', notification);
+    });
+
+    // This listener handles the user tapping on a notification
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+      // Get the data from the notification
+      const data = response.notification.request.content.data;
+      
+      console.log('Notification tapped, data:', data);
+      
+      // Check if the notification contains location data
+      if (data && data.coordinates) {
+        const { latitude, longitude } = data.coordinates;
+        const patientName = data.patientName || 'Unknown';
+        
+        // Use the navigationRef to navigate regardless of which stack we're in
+        if (navigationRef.current) {
+          // First navigate to the HospitalTabs
+          navigationRef.current.navigate('HospitalTabs');
+          
+          // Then navigate to the Map screen with the alert location
+          // We use a small timeout to ensure the HospitalTabs is fully loaded
+          setTimeout(() => {
+            navigationRef.current.navigate('HospitalTabs', {
+              screen: 'Map',
+              params: {
+                latitude,
+                longitude,
+                patientName
+              }
+            });
+          }, 100);
+        }
+      }
+    });
+
+    // Cleanup the listeners on unmount
+    return () => {
+      Notifications.removeNotificationSubscription(notificationListener.current);
+      Notifications.removeNotificationSubscription(responseListener.current);
+    };
   }, []);
 
   return (
@@ -124,7 +169,7 @@ const App = () => {
         barStyle="light-content"
         backgroundColor="#FF3B30"
       />
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen 
             name="Auth" 
