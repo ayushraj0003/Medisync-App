@@ -5,7 +5,7 @@ import { Platform, Alert } from 'react-native';
 import { supabase } from './supabase';
 import { useRef, useEffect } from 'react';
 import { useNavigation } from '@react-navigation/native';
-
+import { Audio } from 'expo-av';
 export const useNotificationHandler = () => {
   const notificationListener = useRef();
   const responseListener = useRef();
@@ -307,6 +307,7 @@ const getAlertsTableSchema = async () => {
 };
 
 // Main function to send SOS alerts to hospitals
+// Main function to send SOS alerts to hospitals
 const sendSOSAlerts = async (alertData) => {
   try {
     // Get the 5 nearest hospitals
@@ -320,64 +321,32 @@ const sendSOSAlerts = async (alertData) => {
     
     console.log(`Found ${nearestHospitals.length} nearby hospitals to notify`);
     
-    // Create the base alert data
-    const alertRecord = {
-      patient_name: alertData.patient_name || 'Unknown',
-      incident_location: alertData.incident_location || 'Unknown',
-      latitude: alertData.latitude || 0,
-      longitude: alertData.longitude || 0,
-      incident_type: alertData.incident_type || 'Unknown',
-      medical_conditions: alertData.medical_conditions || 'None reported',
-      priority_status: alertData.priority_status || 'Low',
-      priority_reason: alertData.priority_reason || 'No reason provided'
-    };
-    
-    // Get the table schema to check if 'status' column exists
-    const columns = await getAlertsTableSchema();
-    if (columns && columns.includes('status')) {
-      // Only add status field if it exists in the table
-      alertRecord.status = 'active';
-    }
-    
-    // Save the alert to the database
-    const { data: savedAlert, error: alertError } = await supabase
-      .from('alert')
-      .insert([alertRecord])
-      .select();
+    // If alert ID is not provided, fetch the most recent alert from the database
+    if (!alertData.id) {
+      console.log("No alert ID provided, fetching the most recent alert ID");
       
-    if (alertError) {
-      console.error("Error saving alert:", alertError);
+      // Try to fetch the most recent alert ID based on the patient name and created_at timestamp
+      const { data: recentAlert, error: fetchError } = await supabase
+        .from('alert')
+        .select('id')
+        .eq('patient_name', alertData.patient_name)
+        .order('created_at', { ascending: false })
+        .limit(1);
       
-      // Try again without the 'status' field if that was the issue
-      if (alertError.code === 'PGRST204' && alertError.message.includes('status')) {
-        delete alertRecord.status;
-        
-        const { data: retryAlert, error: retryError } = await supabase
-          .from('alert')
-          .insert([alertRecord])
-          .select();
-          
-        if (retryError) {
-          console.error("Error on retry saving alert:", retryError);
-          Alert.alert('Error', 'Failed to save alert to database.');
-          return false;
-        }
-        
-        if (!retryAlert || retryAlert.length === 0) {
-          Alert.alert('Error', 'Failed to save alert data.');
-          return false;
-        }
-        
-        alertData.id = retryAlert[0].id;
-      } else {
-        Alert.alert('Error', 'Failed to save alert to database.');
+      if (fetchError) {
+        console.error("Error fetching most recent alert:", fetchError);
+        Alert.alert('Error', 'Could not retrieve alert information.');
         return false;
       }
-    } else if (savedAlert && savedAlert.length > 0) {
-      alertData.id = savedAlert[0].id;
-    } else {
-      Alert.alert('Error', 'Failed to retrieve saved alert data.');
-      return false;
+      
+      if (recentAlert && recentAlert.length > 0) {
+        alertData.id = recentAlert[0].id;
+        console.log("Found most recent alert ID:", alertData.id);
+      } else {
+        console.error("No recent alerts found for this patient");
+        Alert.alert('Error', 'No alert record found for this emergency.');
+        return false;
+      }
     }
     
     console.log(`Sending notifications to ${nearestHospitals.length} hospitals:`, nearestHospitals.map(h => h.name));
@@ -416,7 +385,6 @@ const sendSOSAlerts = async (alertData) => {
     return false;
   }
 };
-
 // Set up notification handling for the app
 const setupNotifications = () => {
   // Set notification handler for how to display received notifications

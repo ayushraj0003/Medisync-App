@@ -7,10 +7,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";  // Import Gemini AP
 import * as Location from 'expo-location';
 import {GEMINI_API_KEY, ASSEMBLY_AI_API_KEY} from "@env";  // Import API keys from .env file
 import { sendSOSAlerts } from './hospitalAlerts';
-import { useNavigation } from "@react-navigation/native"; // Import for navigation
+import { useNavigation } from "@react-navigation/native"; // Import for tion
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { supabase } from './supabase'; // You'll need to create this
+
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -180,7 +181,17 @@ const analyzeWithGemini = async (transcription, location) => {
       console.warn('Invalid or missing location data:', location);
       location = null;
     }
+    const {
+      data: { user },
+      error: userError
+    } = await supabase.auth.getUser();
 
+    if (userError || !user) {
+      console.error("Error fetching authenticated user:", userError);
+      Alert.alert("Authentication Error", "Failed to retrieve user information");
+      return;
+    }
+    const userId = user.id;
     // Create a JSON structure that will be part of the prompt
     const exampleJson = {
       "Patient Name": "Extracted Name or null",
@@ -231,7 +242,7 @@ const analyzeWithGemini = async (transcription, location) => {
       
       // Save to Supabase
       const { data, error } = await supabase
-        .from('alerts')
+        .from('alert')
         .insert([
           {
             patient_name: jsonResponse["Patient Name"] || 'Unknown',
@@ -241,7 +252,8 @@ const analyzeWithGemini = async (transcription, location) => {
             incident_type: jsonResponse["Type of incident"] || 'Unknown',
             medical_conditions: jsonResponse["Medical conditions mentioned"] || 'None reported',
             priority_status: jsonResponse["Priority status"] || 'Low',
-            priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided'
+            priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided',
+            userid: userId
           }
         ])
         .select();
@@ -255,7 +267,8 @@ const analyzeWithGemini = async (transcription, location) => {
           incident_type: jsonResponse["Type of incident"] || 'Unknown',
           medical_conditions: jsonResponse["Medical conditions mentioned"] || 'None reported',
           priority_status: jsonResponse["Priority status"] || 'Low',
-          priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided'
+          priority_reason: jsonResponse["Reason for priority status"] || 'No reason provided',
+          userid: userId
         });
 
       if (error) {
@@ -297,11 +310,12 @@ const analyzeWithGemini = async (transcription, location) => {
 };
 
 export default function ExpoAudioRecorder() {
+  const navigation = useNavigation();
   const [recording, setRecording] = useState(null);
   const [recordingStatus, setRecordingStatus] = useState("idle");
   const [audioPermission, setAudioPermission] = useState(false);
   const [recordingUri, setRecordingUri] = useState(null);
-  const navigation = useNavigation();
+
 
   useEffect(() => {
     const getPermission = async () => {
@@ -349,34 +363,46 @@ export default function ExpoAudioRecorder() {
   const stopRecording = async () => {
     try {
       if (!recording) return;
-
+  
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-
+  
       if (uri) {
         const recordingsDir = `${FileSystem.documentDirectory}recordings/`;
         const dirInfo = await FileSystem.getInfoAsync(recordingsDir);
         if (!dirInfo.exists) {
           await FileSystem.makeDirectoryAsync(recordingsDir, { intermediates: true });
         }
-
+  
         const filename = `recording-${Date.now()}.m4a`;
         const newUri = recordingsDir + filename;
-
+  
         await FileSystem.moveAsync({
           from: uri,
           to: newUri,
         });
-
+  
         setRecordingUri(newUri);
         console.log("Recording saved to:", newUri);
-
+  
         // Trigger transcription
         transcribeAudio(newUri);
-
-        Alert.alert("Recording Saved", "The recording has been saved and is being transcribed.");
+  
+        Alert.alert(
+          "Recording Saved", 
+          "The recording has been saved and is being transcribed. Redirecting to dashboard...",
+          [
+            { 
+              text: "OK", 
+              onPress: () => {
+                // Navigate to UserDashboard
+                navigation.navigate('UserTabs', { screen: 'UserDashboard' });
+              }
+            }
+          ]
+        );
       }
-
+  
       setRecording(null);
       setRecordingStatus("stopped");
     } catch (err) {

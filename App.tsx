@@ -10,7 +10,7 @@ import HospitalDashboard from './src/HospitalDashboard';
 import AuthScreen from './src/auth';
 import { setupNotifications } from './src/hospitalAlerts';
 import { StatusBar } from 'react-native';
-
+import UserDashboard from './src/UserDashboard';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -26,6 +26,8 @@ const UserTabNavigator = () => {
             iconName = focused ? 'warning' : 'warning-outline';
           } else if (route.name === 'Map') {
             iconName = focused ? 'map' : 'map-outline';
+          } else if (route.name === 'UserDashboard') {
+            iconName = focused ? 'person' : 'person-outline';
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
@@ -56,10 +58,16 @@ const UserTabNavigator = () => {
           title: 'Location',
         }}
       />
+      <Tab.Screen 
+        name="UserDashboard" 
+        component={UserDashboard}
+        options={{
+          title: 'Dashboard',
+        }}
+      />
     </Tab.Navigator>
   );
 };
-
 // Create a TabNavigator component for hospital bottom tabs
 const HospitalTabNavigator = () => {
   return (

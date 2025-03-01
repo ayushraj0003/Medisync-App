@@ -7,6 +7,12 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "assets": ["./assets/sounds/*"],
+    "notification": {
+      "icon": "./assets/notification-icon.png",
+      "color": "#ff0000",
+      "sounds": ["./assets/sounds/emergency-alert.mp3"]
+    },
     "plugins": [
       [
         "expo-location",
@@ -60,9 +66,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "4faf99d3-698c-49b7-b84d-53ac51201a9f"
+        "projectId": "b8a64f1c-20b6-4b94-932f-a6875af80938"
       }
     },
-    "owner": "ayush03"
+    "owner": "sashy"
   }
 }

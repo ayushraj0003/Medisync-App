@@ -219,17 +219,20 @@ const HospitalDashboard = () => {
 
   const updateAlertStatus = async (alertId: string, newStatus: string) => {
     try {
-      // Update the alert status
+      // Update the alert status with hospitalid when status changes to 'responding'
+      const updateData = {
+        status: newStatus,
+        ...(newStatus === 'resolved' ? { resolved_at: new Date().toISOString() } : {}),
+        ...(newStatus === 'responding' ? { hospitalid: hospital?.id } : {})
+      };
+  
       const { error } = await supabase
         .from('alert')
-        .update({ 
-          status: newStatus,
-          ...(newStatus === 'resolved' ? { resolved_at: new Date().toISOString() } : {})
-        })
+        .update(updateData)
         .eq('id', alertId);
-
+  
       if (error) throw error;
-
+  
       // If this is a "responding" status, update the notification as well
       if (newStatus === 'responding') {
         const notification = alerts.find(alert => alert.id === alertId)?.notification_id;
@@ -251,14 +254,14 @@ const HospitalDashboard = () => {
           if (notificationError) throw notificationError;
         }
       }
-
+  
       // Update the local state
       setAlerts(prevAlerts => 
         prevAlerts.map(alert => 
-          alert.id === alertId ? { ...alert, status: newStatus } : alert
+          alert.id === alertId ? { ...alert, status: newStatus, ...(newStatus === 'responding' ? { hospitalid: hospital?.id } : {}) } : alert
         )
       );
-
+  
       Alert.alert('Status Updated', `Alert marked as ${newStatus}`);
     } catch (error) {
       console.error('Error updating alert status:', error);
