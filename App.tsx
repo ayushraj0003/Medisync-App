@@ -5,7 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import SOSAudioRecorder from './src/Transcript';
-import MapScreen from './src/MapScreen';
+import MapDirections from './src/MapDirections';
 import HospitalDashboard from './src/HospitalDashboard';
 import AuthScreen from './src/auth';
 import { setupNotifications } from './src/hospitalAlerts';
@@ -44,30 +44,35 @@ const UserTabNavigator = () => {
         },
       })}
     >
-      <Tab.Screen 
-        name="SOS" 
-        component={SOSAudioRecorder}
-        options={{
-          title: 'Emergency SOS',
-        }}
-      />
+      <Tab.Screen name="SOS" component={SOSAudioRecorder} />
       <Tab.Screen 
         name="Map" 
-        component={MapScreen}
-        options={{
-          title: 'Location',
-        }}
+        component={MapDirectionsWrapper} 
+        options={{ title: 'Emergency Map' }}
       />
-      <Tab.Screen 
-        name="UserDashboard" 
-        component={UserDashboard}
-        options={{
-          title: 'Dashboard',
-        }}
-      />
+      <Tab.Screen name="UserDashboard" component={UserDashboard} options={{ title: 'Profile' }} />
     </Tab.Navigator>
   );
 };
+
+// Create a wrapper component for MapDirections to handle default coordinates
+const MapDirectionsWrapper = ({ route }) => {
+  // Default coordinates (can be your city center or hospital location)
+  const defaultLatitude = 10.0459501;
+  const defaultLongitude = 76.3291872;
+  
+  // Use coordinates from navigation params if available, otherwise use defaults
+  const destinationLatitude = route.params?.latitude || defaultLatitude;
+  const destinationLongitude = route.params?.longitude || defaultLongitude;
+  
+  return (
+    <MapDirections 
+      destinationLatitude={destinationLatitude} 
+      destinationLongitude={destinationLongitude} 
+    />
+  );
+};
+
 // Create a TabNavigator component for hospital bottom tabs
 const HospitalTabNavigator = () => {
   return (
@@ -96,19 +101,11 @@ const HospitalTabNavigator = () => {
         },
       })}
     >
-      <Tab.Screen 
-        name="Dashboard" 
-        component={HospitalDashboard}
-        options={{
-          title: 'Emergency Alerts',
-        }}
-      />
+      <Tab.Screen name="Dashboard" component={HospitalDashboard} />
       <Tab.Screen 
         name="Map" 
-        component={MapScreen}
-        options={{
-          title: 'Location Map',
-        }}
+        component={MapDirectionsWrapper}
+        options={{ title: 'Emergency Map' }}
       />
     </Tab.Navigator>
   );
@@ -173,25 +170,12 @@ const App = () => {
 
   return (
     <>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#FF3B30"
-      />
+      <StatusBar barStyle="light-content" backgroundColor="#FF3B30" />
       <NavigationContainer ref={navigationRef}>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen 
-            name="Auth" 
-            component={AuthScreen} 
-            options={{ title: 'Authentication' }} 
-          />
-          <Stack.Screen 
-            name="UserTabs" 
-            component={UserTabNavigator} 
-          />
-          <Stack.Screen 
-            name="HospitalTabs" 
-            component={HospitalTabNavigator} 
-          />
+        <Stack.Navigator initialRouteName="Auth">
+          <Stack.Screen name="Auth" component={AuthScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="UserTabs" component={UserTabNavigator} options={{ headerShown: false }} />
+          <Stack.Screen name="HospitalTabs" component={HospitalTabNavigator} options={{ headerShown: false }} />
         </Stack.Navigator>
       </NavigationContainer>
     </>

@@ -219,6 +219,12 @@ const HospitalDashboard = () => {
 
   const updateAlertStatus = async (alertId: string, newStatus: string) => {
     try {
+      // Find the current alert from our state to get its coordinates
+      const currentAlert = alerts.find(alert => alert.id === alertId);
+      if (!currentAlert) {
+        throw new Error('Alert not found');
+      }
+      
       // Update the alert status with hospitalid when status changes to 'responding'
       const updateData = {
         status: newStatus,
@@ -246,13 +252,19 @@ const HospitalDashboard = () => {
               received_confirmation_at: now.toISOString(),
               // Calculate response time in minutes
               response_time_minutes: Math.floor(
-                (now.getTime() - new Date(alerts.find(a => a.id === alertId)?.created_at || 0).getTime()) / 60000
+                (now.getTime() - new Date(currentAlert.created_at || 0).getTime()) / 60000
               )
             })
             .eq('id', notification);
             
           if (notificationError) throw notificationError;
         }
+        
+        // Call MapDirections component with the incident coordinates when responding
+        navigation.navigate('MapDirections', {
+          destinationLatitude: currentAlert.latitude,
+          destinationLongitude: currentAlert.longitude
+        });
       }
   
       // Update the local state
