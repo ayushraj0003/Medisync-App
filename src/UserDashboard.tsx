@@ -327,8 +327,6 @@ const UserDashboard = () => {
             style={[styles.actionButton, styles.mapButton]}
             onPress={() => {
               navigation.navigate('Map', {
-                latitude: item.latitude,
-                longitude: item.longitude,
                 alertId: item.id
               });
             }}
@@ -390,9 +388,7 @@ const UserDashboard = () => {
             style={styles.viewOnMapButton}
             onPress={() => {
               navigation.navigate('Map', {
-                latitude: respondingHospital.latitude,
-                longitude: respondingHospital.longitude,
-                hospitalName: respondingHospital.name
+                alertId:  selectedAlert.id 
               });
             }}
           >

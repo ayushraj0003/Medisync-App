@@ -33,7 +33,7 @@ export const useNotificationHandler = () => {
         const patientName = data.patientName || 'Unknown';
         
         // Navigate to the Map screen with the alert location
-        navigation.navigate('Map', {
+        navigation.navigate('HospitalMap', {
           latitude,
           longitude,
           patientName

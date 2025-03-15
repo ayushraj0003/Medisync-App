@@ -8,12 +8,12 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
-  Image,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "@mapbox/polyline";
+import { supabase } from "./supabase"; // Import your Supabase client
 
 // You'll need to replace this with your actual Google Maps API key
 const GOOGLE_MAPS_API_KEY = "";
@@ -30,23 +30,20 @@ interface RouteInfo {
   duration: string;
 }
 
-interface MapDirectionsProps {
-  destinationLatitude: number;
-  destinationLongitude: number;
-}
+// Changed to accept props directly instead of using useRoute
+export default function MapDirections({ destinationLatitude, destinationLongitude, alertId }) {
+  // Log the received props for debugging
+  useEffect(() => {
+    console.log("Props received:", { 
+      destinationLatitude, 
+      destinationLongitude, 
+      alertId 
+    });
+  }, [destinationLatitude, destinationLongitude, alertId]);
 
-export default function MapDirections({
-  destinationLatitude,
-  destinationLongitude,
-}: MapDirectionsProps) {
   const mapRef = useRef<MapView>(null);
   const [origin, setOrigin] = useState<Location | null>(null);
-  const [destination, setDestination] = useState<Location>({
-    latitude: destinationLatitude,
-    longitude: destinationLongitude,
-    latitudeDelta: 0.005,
-    longitudeDelta: 0.005,
-  });
+  const [destination, setDestination] = useState<Location | null>(null);
   const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<Location[]>([]);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
@@ -63,12 +60,42 @@ export default function MapDirections({
 
   // Update destination when props change
   useEffect(() => {
-    setDestination({
-      latitude: destinationLatitude,
-      longitude: destinationLongitude,
-      latitudeDelta: 0.005,
-      longitudeDelta: 0.005,
-    });
+    if (destinationLatitude && destinationLongitude) {
+      // Explicitly parse to float to ensure they're numbers
+      const lat = parseFloat(destinationLatitude);
+      const lng = parseFloat(destinationLongitude);
+      
+      console.log("Setting destination to:", lat, lng, alertId);
+      
+      if (!isNaN(lat) && !isNaN(lng)) {
+        const newDestination = {
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
+        };
+        
+        setDestination(newDestination);
+        
+        // If we already have the user's location, update the route
+        if (origin) {
+          getDirections(origin, newDestination);
+        }
+        
+        // Fit the map to show both points if we have origin
+        if (origin && mapRef.current) {
+          const coordinates = [origin, newDestination];
+          mapRef.current.fitToCoordinates(coordinates, {
+            edgePadding: mapPadding,
+            animated: true,
+          });
+        }
+      } else {
+        console.error("Invalid destination coordinates:", destinationLatitude, destinationLongitude);
+      }
+    } else {
+      console.warn("Missing destination coordinates");
+    }
   }, [destinationLatitude, destinationLongitude]);
 
   // Request location permissions and get initial location
@@ -89,6 +116,32 @@ export default function MapDirections({
     };
   }, []);
 
+  // Update ambulance location in Supabase
+  const updateAmbulanceLocation = async (latitude, longitude) => {
+    // Check if there's a valid alertId before attempting to update
+    if (!alertId) {
+      console.log('No valid alert ID available for updating ambulance location');
+      return; // Exit the function early without attempting the update
+    }
+  
+    try {
+      const { error } = await supabase
+        .from('alert')
+        .update({
+          ambulance_latitude: latitude,
+          ambulance_longitude: longitude,
+          ambulance_last_updated: new Date().toISOString()
+        })
+        .eq('id', alertId);
+  
+      if (error) {
+        throw error;
+      }
+    } catch (error) {
+      console.error('Error updating ambulance location:', error);
+    }
+  };
+
   // Start real-time location tracking
   const startLocationTracking = async () => {
     try {
@@ -107,6 +160,9 @@ export default function MapDirections({
 
       setCurrentLocation(newLocation);
       setOrigin(newLocation);
+      
+      // Update the initial location in Supabase
+      await updateAmbulanceLocation(latitude, longitude);
 
       // Subscribe to location updates
       const subscription = await Location.watchPositionAsync(
@@ -126,14 +182,17 @@ export default function MapDirections({
 
           setCurrentLocation(newLocation);
           setOrigin(newLocation);
+          
+          // Update ambulance location in Supabase
+          updateAmbulanceLocation(latitude, longitude);
 
           // If following user is enabled, center map on user
           if (followUserLocation && mapRef.current) {
             mapRef.current.animateToRegion(newLocation, 500);
           }
 
-          // If the user has moved enough, update the route directions
-          if (shouldUpdateRoute(newLocation)) {
+          // If the user has moved enough and we have a destination, update the route directions
+          if (destination && shouldUpdateRoute(newLocation)) {
             getDirections(newLocation, destination);
           }
         }
@@ -203,6 +262,9 @@ export default function MapDirections({
       // Construct the Directions API URL
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
 
+      // Log the request URL for debugging
+      console.log("Directions request:", start.latitude, start.longitude, "to", end.latitude, end.longitude);
+
       // Fetch directions data
       const response = await fetch(url);
       const data = await response.json();
@@ -232,12 +294,8 @@ export default function MapDirections({
         duration: leg.duration.text,
       });
 
-      // Only fit to coordinates if this is the first time
-      if (
-        lastRouteFetchTime === 0 &&
-        mapRef.current &&
-        routeCoordinates.length > 0
-      ) {
+      // Fit to coordinates if we have a valid route
+      if (mapRef.current && routeCoordinates.length > 0) {
         mapRef.current.fitToCoordinates(routeCoordinates, {
           edgePadding: mapPadding,
           animated: true,
@@ -295,9 +353,10 @@ export default function MapDirections({
     }
   };
 
-  // Calculate route when origin and destination are both available
+  // Calculate route when both origin and destination change
   useEffect(() => {
     if (origin && destination) {
+      console.log("Both origin and destination available, getting directions");
       getDirections(origin, destination);
     }
   }, [origin, destination]);
@@ -354,7 +413,11 @@ export default function MapDirections({
 
         {/* Destination Marker */}
         {destination && (
-          <Marker coordinate={destination} title="Destination" pinColor="red" />
+          <Marker 
+            coordinate={destination} 
+            title="Destination" 
+            pinColor="red"
+          />
         )}
 
         {/* Route Polyline */}
@@ -443,6 +506,7 @@ export default function MapDirections({
   );
 }
 
+// Styles remain the same
 const styles = StyleSheet.create({
   container: {
     flex: 1,

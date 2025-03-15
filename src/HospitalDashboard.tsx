@@ -261,9 +261,10 @@ const HospitalDashboard = () => {
         }
         
         // Call MapDirections component with the incident coordinates when responding
-        navigation.navigate('MapDirections', {
+        navigation.navigate('HospitalMap', {
           destinationLatitude: currentAlert.latitude,
-          destinationLongitude: currentAlert.longitude
+          destinationLongitude: currentAlert.longitude,
+          alertId: alertId
         });
       }
   
@@ -320,12 +321,12 @@ const HospitalDashboard = () => {
         <View style={styles.actionButtons}>
           {item.status === 'active' && (
             <TouchableOpacity 
-              style={[styles.actionButton, styles.respondButton]}
-              onPress={() => updateAlertStatus(item.id, 'responding')}
-            >
-              <Ionicons name="medical" size={16} color="white" />
-              <Text style={styles.buttonText}>Respond</Text>
-            </TouchableOpacity>
+            style={[styles.actionButton, styles.respondButton]}
+            onPress={() => updateAlertStatus(item.id, 'responding')}
+          >
+            <Ionicons name="medical" size={16} color="white" />
+            <Text style={styles.buttonText}>Respond</Text>
+          </TouchableOpacity>
           )}
           
           {(item.status === 'active' || item.status === 'responding') && (
@@ -342,10 +343,10 @@ const HospitalDashboard = () => {
             style={[styles.actionButton, styles.mapButton]}
             onPress={() => {
                 // Navigate to the Map tab with the actual alert location parameters
-                navigation.navigate('Map', {
-                latitude: item.latitude,
-                longitude: item.longitude,
-                patientName: item.patient_name || "Unknown"
+                navigation.navigate('HospitalMap', {
+                  destinationLatitude: item.latitude,
+                  destinationLongitude: item.longitude,
+                  alertId: item.id
                 });
             }}
             >
