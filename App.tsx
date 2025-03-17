@@ -90,10 +90,8 @@ const MapDirectionsWrapper = ({ route }) => {
   const defaultLongitude = 76.3291872;
 
   // Use coordinates from route params if available
-  const destinationLatitude =
-    route?.params?.destinationLatitude || defaultLatitude;
-  const destinationLongitude =
-    route?.params?.destinationLongitude || defaultLongitude;
+  const destinationLatitude = route?.params?.destinationLatitude || defaultLatitude;
+  const destinationLongitude = route?.params?.destinationLongitude || defaultLongitude;
 
   // Explicitly extract alertId
   const alertId = route?.params?.alertId;
@@ -104,6 +102,7 @@ const MapDirectionsWrapper = ({ route }) => {
     alertId,
   });
 
+  // Make sure this return statement is in your code
   return (
     <MapDirections
       destinationLatitude={destinationLatitude}
@@ -191,7 +190,7 @@ const App = () => {
             // Then navigate to the Map screen with parameters
             setTimeout(() => {
               navigationRef.current.navigate("HospitalTabs", {
-                screen: "Map",
+                screen: "HospitalMap",
                 params: {
                   destinationLatitude: latitude,
                   destinationLongitude: longitude,

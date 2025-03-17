@@ -8,15 +8,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  Alert,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "@mapbox/polyline";
 import { supabase } from "./supabase"; // Import your Supabase client
+import {GOOGLE_MAPS_API_KEY} from "@env";
 
 // You'll need to replace this with your actual Google Maps API key
-const GOOGLE_MAPS_API_KEY = "";
+// const GOOGLE_MAPS_API_KEY = "";
 
 interface Location {
   latitude: number;
@@ -32,6 +34,13 @@ interface RouteInfo {
 
 // Changed to accept props directly instead of using useRoute
 export default function MapDirections({ destinationLatitude, destinationLongitude, alertId }) {
+  // Store alertId in a ref to ensure it's always available in callbacks
+  const alertIdRef = useRef(alertId);
+  
+  // Track update timestamps to prevent race conditions
+  const lastUpdateTimeRef = useRef(0);
+  const UPDATE_INTERVAL_MS = 3000; // Minimum time between updates
+  
   // Log the received props for debugging
   useEffect(() => {
     console.log("Props received:", { 
@@ -39,6 +48,14 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
       destinationLongitude, 
       alertId 
     });
+    
+    // Update the ref whenever alertId changes
+    alertIdRef.current = alertId;
+    
+    // Log warning if alertId is missing
+    if (!alertId) {
+      console.warn("No alertId provided - location updates won't be saved");
+    }
   }, [destinationLatitude, destinationLongitude, alertId]);
 
   const mapRef = useRef<MapView>(null);
@@ -104,11 +121,17 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         console.error("Permission to access location was denied");
+        Alert.alert(
+          "Location Permission Denied",
+          "Please enable location permissions to track ambulance position."
+        );
         return;
       }
 
       startLocationTracking();
     })();
+    
+    // Clean up on unmount
     return () => {
       if (locationSubscription) {
         locationSubscription.remove();
@@ -116,29 +139,85 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
     };
   }, []);
 
-  // Update ambulance location in Supabase
+  // Verify location updates are being stored correctly
+  useEffect(() => {
+    if (!alertId) return;
+    
+    const interval = setInterval(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('alert')
+          .select('ambulance_latitude, ambulance_longitude, ambulance_last_updated')
+          .eq('id', alertId)
+          .single();
+          
+        if (error) {
+          console.error("Failed to verify location updates:", error);
+          return;
+        }
+        
+        if (data) {
+          const lastUpdateTime = data.ambulance_last_updated ? new Date(data.ambulance_last_updated) : null;
+          const timeSinceUpdate = lastUpdateTime ? (new Date().getTime() - lastUpdateTime.getTime()) / 1000 : null;
+          
+          console.log(`DB ambulance location: (${data.ambulance_latitude}, ${data.ambulance_longitude}), ` +
+                      `last updated: ${timeSinceUpdate ? Math.round(timeSinceUpdate) + 's ago' : 'never'}`);
+        }
+      } catch (err) {
+        console.error("Error verifying location updates:", err);
+      }
+    }, 15000);
+    
+    return () => clearInterval(interval);
+  }, [alertId]);
+
+  // Update ambulance location in Supabase with better error handling and rate limiting
   const updateAmbulanceLocation = async (latitude, longitude) => {
     // Check if there's a valid alertId before attempting to update
-    if (!alertId) {
+    const currentAlertId = alertIdRef.current;
+    if (!currentAlertId) {
       console.log('No valid alert ID available for updating ambulance location');
-      return; // Exit the function early without attempting the update
+      return false;
+    }
+    
+    // Validate coordinates
+    if (typeof latitude !== 'number' || typeof longitude !== 'number' || 
+        isNaN(latitude) || isNaN(longitude)) {
+      console.error('Invalid coordinates:', latitude, longitude);
+      return false;
+    }
+    
+    // Rate limiting - prevent updates too close together
+    const now = Date.now();
+    if (now - lastUpdateTimeRef.current < UPDATE_INTERVAL_MS) {
+      console.log('Skipping update - too soon after last update');
+      return false;
     }
   
     try {
-      const { error } = await supabase
+      console.log(`Updating ambulance location for alert ${currentAlertId}: lat=${latitude}, lng=${longitude}`);
+      
+      const { data, error } = await supabase
         .from('alert')
         .update({
           ambulance_latitude: latitude,
           ambulance_longitude: longitude,
           ambulance_last_updated: new Date().toISOString()
         })
-        .eq('id', alertId);
+        .eq('id', currentAlertId);
   
       if (error) {
-        throw error;
+        console.error('Error updating ambulance location:', error);
+        return false;
       }
+      
+      // Update successful
+      lastUpdateTimeRef.current = now;
+      console.log('Successfully updated ambulance location in database');
+      return true;
     } catch (error) {
-      console.error('Error updating ambulance location:', error);
+      console.error('Exception updating ambulance location:', error);
+      return false;
     }
   };
 
@@ -162,45 +241,55 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
       setOrigin(newLocation);
       
       // Update the initial location in Supabase
-      await updateAmbulanceLocation(latitude, longitude);
+      const updated = await updateAmbulanceLocation(latitude, longitude);
+      console.log(`Initial location update ${updated ? 'successful' : 'failed'}`);
 
-      // Subscribe to location updates
-      const subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Highest,
-          distanceInterval: 10, // Update every 10 meters
-          timeInterval: 5000, // Or every 5 seconds
-        },
-        (location) => {
-          const { latitude, longitude } = location.coords;
-          const newLocation = {
-            latitude,
-            longitude,
-            latitudeDelta: 0.005,
-            longitudeDelta: 0.005,
-          };
+      // Subscribe to location updates with some delay to avoid multiple initial updates
+      setTimeout(async () => {
+        const subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Highest,
+            distanceInterval: 10, // Update every 10 meters
+            timeInterval: 5000, // Or every 5 seconds
+          },
+          async (location) => {
+            const { latitude, longitude } = location.coords;
+            const newLocation = {
+              latitude,
+              longitude,
+              latitudeDelta: 0.005,
+              longitudeDelta: 0.005,
+            };
 
-          setCurrentLocation(newLocation);
-          setOrigin(newLocation);
-          
-          // Update ambulance location in Supabase
-          updateAmbulanceLocation(latitude, longitude);
+            setCurrentLocation(newLocation);
+            setOrigin(newLocation);
+            
+            // Update ambulance location in Supabase
+            const updated = await updateAmbulanceLocation(latitude, longitude);
+            if (!updated) {
+              console.warn("Failed to update ambulance location in database");
+            }
 
-          // If following user is enabled, center map on user
-          if (followUserLocation && mapRef.current) {
-            mapRef.current.animateToRegion(newLocation, 500);
+            // If following user is enabled, center map on user
+            if (followUserLocation && mapRef.current) {
+              mapRef.current.animateToRegion(newLocation, 500);
+            }
+
+            // If the user has moved enough and we have a destination, update the route directions
+            if (destination && shouldUpdateRoute(newLocation)) {
+              getDirections(newLocation, destination);
+            }
           }
+        );
 
-          // If the user has moved enough and we have a destination, update the route directions
-          if (destination && shouldUpdateRoute(newLocation)) {
-            getDirections(newLocation, destination);
-          }
-        }
-      );
-
-      setLocationSubscription(subscription);
+        setLocationSubscription(subscription);
+      }, 1000);
     } catch (error) {
       console.error("Error starting location tracking:", error);
+      Alert.alert(
+        "Location Error", 
+        "Failed to start location tracking. Please check your device settings."
+      );
     }
   };
 
@@ -261,9 +350,6 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
 
       // Construct the Directions API URL
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
-
-      // Log the request URL for debugging
-      console.log("Directions request:", start.latitude, start.longitude, "to", end.latitude, end.longitude);
 
       // Fetch directions data
       const response = await fetch(url);
@@ -430,6 +516,16 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
         )}
       </MapView>
 
+      {/* Debugging Info Panel - Can be removed in production */}
+      {alertId && (
+        <View style={styles.debugInfoContainer}>
+          <Text style={styles.debugText}>Alert ID: {alertId.substring(0, 8)}...</Text>
+          <Text style={styles.debugText}>
+            Updates: {currentLocation ? "Active" : "Waiting..."}
+          </Text>
+        </View>
+      )}
+
       {/* Route Info */}
       {routeInfo && (
         <View style={styles.routeInfoContainer}>
@@ -593,5 +689,17 @@ const styles = StyleSheet.create({
   },
   activeControlButton: {
     backgroundColor: "#4285F4",
+  },
+  debugInfoContainer: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: 5,
+    padding: 5,
+  },
+  debugText: {
+    color: "white",
+    fontSize: 10,
   },
 });

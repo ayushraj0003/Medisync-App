@@ -6,14 +6,16 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  Alert,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "@mapbox/polyline";
 import { supabase } from "./supabase"; // Import your Supabase client
+import {GOOGLE_MAPS_API_KEY} from "@env";
 
 // You'll need to replace this with your actual Google Maps API key
-const GOOGLE_MAPS_API_KEY = "";
+// const GOOGLE_MAPS_API_KEY = "";
 
 interface Location {
   latitude: number;
@@ -32,6 +34,15 @@ interface PatientMapViewProps {
 }
 
 export default function PatientMapView({ alertId }: PatientMapViewProps) {
+  // Store alertId in a ref to ensure it's always available in callbacks
+  const alertIdRef = useRef(alertId);
+  
+  // Track the alert's status
+  const [alertStatus, setAlertStatus] = useState<string | null>(null);
+  
+  // Track ambulance assignment status
+  const [isAmbulanceAssigned, setIsAmbulanceAssigned] = useState(false);
+  
   const mapRef = useRef<MapView>(null);
   const [patientLocation, setPatientLocation] = useState<Location | null>(null);
   const [ambulanceLocation, setAmbulanceLocation] = useState<Location | null>(null);
@@ -46,13 +57,34 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
     left: 50,
   });
   const [alertDetails, setAlertDetails] = useState<any>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Log the received props for debugging
+  useEffect(() => {
+    console.log("PatientMapView received alertId:", alertId);
+    
+    // Update the ref whenever alertId changes
+    alertIdRef.current = alertId;
+    
+    // Log warning if alertId is missing
+    if (!alertId) {
+      console.warn("No alertId provided - cannot track ambulance");
+    }
+  }, [alertId]);
 
   // Fetch initial alert data and subscribe to updates
   useEffect(() => {
+    if (!alertId) {
+      setLoading(false);
+      return;
+    }
+    
     // Initial fetch of the alert data
     const fetchAlertData = async () => {
       try {
         setLoading(true);
+        console.log("Fetching alert data for ID:", alertId);
+        
         const { data, error } = await supabase
           .from("alert")
           .select("*")
@@ -60,23 +92,37 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
           .single();
 
         if (error) {
+          console.error("Error fetching alert data:", error.message);
+          Alert.alert("Error", "Failed to fetch alert information.");
           throw error;
         }
 
         if (data) {
+          console.log("Alert data received:", {
+            status: data.status,
+            has_ambulance: Boolean(data.ambulance_latitude && data.ambulance_longitude)
+          });
+          
           setAlertDetails(data);
+          setAlertStatus(data.status);
           
           // Set patient location from alert data
-          const patientLoc = {
-            latitude: data.latitude,
-            longitude: data.longitude,
-            latitudeDelta: 0.005,
-            longitudeDelta: 0.005,
-          };
-          setPatientLocation(patientLoc);
+          if (data.latitude && data.longitude) {
+            const patientLoc = {
+              latitude: data.latitude,
+              longitude: data.longitude,
+              latitudeDelta: 0.005,
+              longitudeDelta: 0.005,
+            };
+            setPatientLocation(patientLoc);
+          } else {
+            console.warn("Alert has no patient location coordinates");
+          }
           
           // Set ambulance location if available
           if (data.ambulance_latitude && data.ambulance_longitude) {
+            setIsAmbulanceAssigned(true);
+            
             const ambulanceLoc = {
               latitude: data.ambulance_latitude,
               longitude: data.ambulance_longitude,
@@ -85,14 +131,26 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
             };
             setAmbulanceLocation(ambulanceLoc);
             
-            // Calculate route if both locations are available
-            if (patientLoc && ambulanceLoc) {
-              getDirections(ambulanceLoc, patientLoc);
+            if (data.ambulance_last_updated) {
+              setLastUpdated(new Date(data.ambulance_last_updated));
             }
+            
+            // Calculate route if both locations are available
+            if (data.latitude && data.longitude) {
+              getDirections(ambulanceLoc, {
+                latitude: data.latitude,
+                longitude: data.longitude
+              });
+            }
+          } else {
+            setIsAmbulanceAssigned(false);
+            console.log("No ambulance assigned yet");
           }
+        } else {
+          console.warn("No alert data found for ID:", alertId);
         }
       } catch (error) {
-        console.error("Error fetching alert data:", error);
+        console.error("Error in fetchAlertData:", error);
       } finally {
         setLoading(false);
       }
@@ -101,8 +159,10 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
     fetchAlertData();
 
     // Subscribe to real-time updates for this alert
+    console.log("Setting up real-time subscription for alert:", alertId);
+    
     const subscription = supabase
-      .channel(`alert:${alertId}`)
+      .channel(`patient-alert:${alertId}`)
       .on(
         "postgres_changes",
         {
@@ -112,14 +172,25 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
           filter: `id=eq.${alertId}`,
         },
         (payload) => {
+          console.log("Real-time update received:", {
+            ambulance_lat: payload.new.ambulance_latitude,
+            ambulance_lng: payload.new.ambulance_longitude,
+            status: payload.new.status,
+          });
+          
           const updatedAlert = payload.new;
           setAlertDetails(updatedAlert);
+          setAlertStatus(updatedAlert.status);
+          
+          // Update ambulance assignment status
+          const hasAmbulanceLocation = 
+            updatedAlert.ambulance_latitude && 
+            updatedAlert.ambulance_longitude;
+            
+          setIsAmbulanceAssigned(hasAmbulanceLocation);
           
           // Update ambulance location if available
-          if (
-            updatedAlert.ambulance_latitude &&
-            updatedAlert.ambulance_longitude
-          ) {
+          if (hasAmbulanceLocation) {
             const newAmbulanceLocation = {
               latitude: updatedAlert.ambulance_latitude,
               longitude: updatedAlert.ambulance_longitude,
@@ -127,6 +198,10 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
               longitudeDelta: 0.005,
             };
             setAmbulanceLocation(newAmbulanceLocation);
+            
+            if (updatedAlert.ambulance_last_updated) {
+              setLastUpdated(new Date(updatedAlert.ambulance_last_updated));
+            }
             
             // Update route if patient location is available
             if (patientLocation) {
@@ -139,22 +214,28 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
     // Cleanup subscription
     return () => {
+      console.log("Cleaning up subscription");
       supabase.removeChannel(subscription);
     };
   }, [alertId]);
 
   // Get directions between two points using Google Maps Directions API
   const getDirections = async (start: Location, end: Location) => {
-    if (!start || !end) return;
+    if (!start || !end) {
+      console.warn("Missing start or end coordinates for directions");
+      return;
+    }
 
     try {
       // Only fetch new directions if enough time has passed (to avoid excessive API calls)
       const currentTime = Date.now();
       if (currentTime - lastRouteFetchTime < 15000) {
+        console.log("Skipping route update - too soon after last update");
         return;
       }
       
       setLastRouteFetchTime(currentTime);
+      console.log("Getting directions from ambulance to patient");
 
       // Construct the Directions API URL
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
@@ -202,11 +283,25 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
       console.error("Error getting directions:", error);
       
       // Fallback to simple straight line if API fails
+      console.log("Using fallback straight line path");
       const points = [
         { latitude: start.latitude, longitude: start.longitude },
         { latitude: end.latitude, longitude: end.longitude },
       ];
       setRouteCoordinates(points);
+      
+      // Calculate straight-line distance
+      const distance = getDistanceFromLatLonInKm(
+        start.latitude,
+        start.longitude,
+        end.latitude,
+        end.longitude
+      );
+
+      setRouteInfo({
+        distance: `${distance.toFixed(1)} km (straight line)`,
+        duration: `${Math.ceil((distance / 0.5) * 60)} mins (estimate)`,
+      });
     }
   };
 
@@ -251,11 +346,38 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
   // Center map to show all markers
   const fitMapToMarkers = () => {
-    if (mapRef.current && patientLocation && ambulanceLocation) {
-      mapRef.current.fitToCoordinates([patientLocation, ambulanceLocation], {
-        edgePadding: mapPadding,
-        animated: true,
-      });
+    if (mapRef.current) {
+      if (patientLocation && ambulanceLocation) {
+        // If both markers exist, fit to both
+        mapRef.current.fitToCoordinates([patientLocation, ambulanceLocation], {
+          edgePadding: mapPadding,
+          animated: true,
+        });
+      } else if (patientLocation) {
+        // If only patient location exists, center on it
+        mapRef.current.animateToRegion({
+          ...patientLocation,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01
+        }, 500);
+      }
+    }
+  };
+  
+  // Format time difference for user-friendly display
+  const getTimeSinceUpdate = () => {
+    if (!lastUpdated) return "N/A";
+    
+    const now = new Date();
+    const diffMs = now.getTime() - lastUpdated.getTime();
+    const diffSecs = Math.floor(diffMs / 1000);
+    
+    if (diffSecs < 60) {
+      return `${diffSecs} seconds ago`;
+    } else if (diffSecs < 3600) {
+      return `${Math.floor(diffSecs / 60)} minutes ago`;
+    } else {
+      return `${Math.floor(diffSecs / 3600)} hours ago`;
     }
   };
 
@@ -263,7 +385,20 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4285F4" />
-        <Text style={{ marginTop: 10 }}>Loading ambulance location...</Text>
+        <Text style={{ marginTop: 10 }}>Loading emergency data...</Text>
+      </View>
+    );
+  }
+  
+  // Check if alertId is missing
+  if (!alertId) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle" size={64} color="#FF3B30" />
+        <Text style={styles.errorTitle}>No Alert Selected</Text>
+        <Text style={styles.errorText}>
+          Cannot track ambulance without an emergency alert ID.
+        </Text>
       </View>
     );
   }
@@ -298,14 +433,18 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
         )}
 
         {/* Ambulance Marker */}
-        {ambulanceLocation && (
-          <Marker coordinate={ambulanceLocation} title="Ambulance">
+        {ambulanceLocation && isAmbulanceAssigned && (
+          <Marker 
+            coordinate={ambulanceLocation} 
+            title="Ambulance"
+            tracksViewChanges={false}
+          >
             <AmbulanceMarker />
           </Marker>
         )}
 
         {/* Route Polyline */}
-        {routeCoordinates.length > 0 && (
+        {routeCoordinates.length > 0 && isAmbulanceAssigned && (
           <Polyline
             coordinates={routeCoordinates}
             strokeWidth={5}
@@ -316,8 +455,11 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
       {/* Status Box */}
       <View style={styles.statusContainer}>
-        <Text style={styles.statusTitle}>Ambulance Status</Text>
-        {ambulanceLocation ? (
+        <Text style={styles.statusTitle}>
+          Emergency Status: {alertStatus ? alertStatus.toUpperCase() : "UNKNOWN"}
+        </Text>
+        
+        {isAmbulanceAssigned ? (
           <>
             <Text style={styles.statusText}>Ambulance is on the way!</Text>
             {routeInfo && (
@@ -331,13 +473,31 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
               </>
             )}
             <Text style={styles.updateText}>
-              Location updates in real-time
+              Last updated: {getTimeSinceUpdate()}
             </Text>
           </>
         ) : (
-          <Text style={styles.statusText}>
-            Waiting for ambulance to be dispatched...
-          </Text>
+          <View style={styles.waitingContainer}>
+            <ActivityIndicator size="small" color="#FF3B30" style={styles.spinner} />
+            <View style={styles.waitingTextContainer}>
+              <Text style={styles.waitingText}>
+                Waiting for ambulance to be dispatched...
+              </Text>
+              <Text style={styles.waitingSubtext}>
+                {alertStatus === 'responding' 
+                  ? 'Hospital is responding to your emergency'
+                  : 'Your alert has been sent to nearby hospitals'}
+              </Text>
+            </View>
+          </View>
+        )}
+        
+        {alertId && (
+          <View style={styles.alertIDContainer}>
+            <Text style={styles.alertIDText}>
+              Alert ID: {alertId.substring(0, 8)}...
+            </Text>
+          </View>
         )}
       </View>
 
@@ -364,6 +524,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#f5f5f5",
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f5f5f5",
+    padding: 20,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginTop: 20,
+    marginBottom: 10,
+    color: "#FF3B30",
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: "center",
+    color: "#666",
   },
   statusContainer: {
     position: "absolute",
@@ -399,6 +578,37 @@ const styles = StyleSheet.create({
     marginTop: 5,
     color: "#888",
     fontStyle: "italic",
+  },
+  waitingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 5,
+  },
+  spinner: {
+    marginRight: 10,
+  },
+  waitingTextContainer: {
+    flex: 1,
+  },
+  waitingText: {
+    fontSize: 16,
+    color: "#FF3B30",
+  },
+  waitingSubtext: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
+  },
+  alertIDContainer: {
+    marginTop: 10,
+    padding: 5,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 5,
+    alignSelf: "flex-start",
+  },
+  alertIDText: {
+    fontSize: 10,
+    color: "#888",
   },
   mapControls: {
     position: "absolute",
