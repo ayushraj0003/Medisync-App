@@ -14,11 +14,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "@mapbox/polyline";
-import { supabase } from "./supabase"; // Import your Supabase client
-import {GOOGLE_MAPS_API_KEY} from "@env";
-
-// You'll need to replace this with your actual Google Maps API key
-// const GOOGLE_MAPS_API_KEY = "";
+import { supabase } from "./supabase";
+import { GOOGLE_MAPS_API_KEY } from "@env";
 
 interface Location {
   latitude: number;
@@ -32,31 +29,42 @@ interface RouteInfo {
   duration: string;
 }
 
-// Changed to accept props directly instead of using useRoute
-export default function MapDirections({ destinationLatitude, destinationLongitude, alertId }) {
-  // Store alertId in a ref to ensure it's always available in callbacks
-  const alertIdRef = useRef(alertId);
-  
-  // Track update timestamps to prevent race conditions
-  const lastUpdateTimeRef = useRef(0);
-  const UPDATE_INTERVAL_MS = 3000; // Minimum time between updates
-  
-  // Log the received props for debugging
+export default function MapDirections(props) {
+  // Extract params from both props and route
+  const route = props.route || {};
+
+  // Get params either directly from props or from route.params
+  const destinationLatitude =
+    props.destinationLatitude || route.params?.destinationLatitude;
+  const destinationLongitude =
+    props.destinationLongitude || route.params?.destinationLongitude;
+  const alertId = props.alertId || route.params?.alertId;
+  const status = props.status || route.params?.status || "active";
+
+  // Log what we received for debugging
   useEffect(() => {
-    console.log("Props received:", { 
-      destinationLatitude, 
-      destinationLongitude, 
-      alertId 
+    console.log("MapDirections received:", {
+      fromProps: {
+        destinationLatitude: props.destinationLatitude,
+        destinationLongitude: props.destinationLongitude,
+        alertId: props.alertId,
+        status: props.status,
+      },
+      fromRoute: route.params,
+      usingValues: {
+        destinationLatitude,
+        destinationLongitude,
+        alertId,
+        status,
+      },
     });
-    
-    // Update the ref whenever alertId changes
-    alertIdRef.current = alertId;
-    
-    // Log warning if alertId is missing
-    if (!alertId) {
-      console.warn("No alertId provided - location updates won't be saved");
-    }
-  }, [destinationLatitude, destinationLongitude, alertId]);
+  }, [props, route]);
+
+  const [updateError, setUpdateError] = useState(null);
+  // Rest of your component stays the same
+  const alertIdRef = useRef(alertId);
+  const lastUpdateTimeRef = useRef(0);
+  const UPDATE_INTERVAL_MS = 3000;
 
   const mapRef = useRef<MapView>(null);
   const [origin, setOrigin] = useState<Location | null>(null);
@@ -75,15 +83,97 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
     left: 50,
   });
 
+  // Listen for changes in alertId. If a new alertId is passed, reset tracking.
+  // Uncomment and modify this effect to use current location
+useEffect(() => {
+  if (alertId && status === "responding" && currentLocation) {
+    // Do a direct update with current location whenever it changes
+    const updateWithCurrentLocation = async () => {
+      try {
+        console.log("Updating with current location:", currentLocation);
+        
+        const { data, error } = await supabase
+          .from("alert")
+          .update({
+            ambulance_latitude: currentLocation.latitude,
+            ambulance_longitude: currentLocation.longitude,
+            ambulance_last_updated: new Date().toISOString()
+          })
+          .eq("id", alertId);
+          
+        if (error) {
+          console.error("❌ LOCATION UPDATE FAILED:", error);
+          setUpdateError(error.message);
+        } else {
+          console.log("✅ LOCATION UPDATE SUCCEEDED");
+        }
+      } catch (e) {
+        console.error("❌ EXCEPTION IN LOCATION UPDATE:", e);
+        setUpdateError(e.message);
+      }
+    };
+    
+    // Update when this effect runs
+    updateWithCurrentLocation();
+  }
+}, [alertId, status, currentLocation]);  // This will run whenever location changes
+
+  // Add this effect to check authentication status
+useEffect(() => {
+  const checkAuth = async () => {
+    const { data, error } = await supabase.auth.getSession();
+    
+    if (error) {
+      console.error("❌ AUTH ERROR:", error);
+      setUpdateError(`Auth error: ${error.message}`);
+    } else if (!data.session) {
+      console.warn("⚠️ NO AUTH SESSION - updates might be rejected");
+    } else {
+      console.log("✅ AUTH SESSION VALID:", data.session.user?.id);
+    }
+  };
+  
+  checkAuth();
+}, []);
+
+  useEffect(() => {
+    if (!alertId) {
+      console.warn("No alertId provided - location updates won't be saved");
+      return;
+    }
+
+    // If the new alertId differs from the old one, restart tracking
+    if (alertId !== alertIdRef.current) {
+      console.log("New alert ID detected:", alertId);
+      alertIdRef.current = alertId;
+      lastUpdateTimeRef.current = 0;
+      // Clean up old subscription if it exists
+      if (locationSubscription) {
+        locationSubscription.remove();
+        setLocationSubscription(null);
+      }
+      startLocationTracking(); // re-start with new alert ID
+    }
+  }, [alertId]);
+
+  // Log initial props
+  useEffect(() => {
+    console.log("Props received:", {
+      destinationLatitude,
+      destinationLongitude,
+      alertId,
+      status,
+    });
+  }, [destinationLatitude, destinationLongitude, alertId, status]);
+
   // Update destination when props change
   useEffect(() => {
     if (destinationLatitude && destinationLongitude) {
-      // Explicitly parse to float to ensure they're numbers
       const lat = parseFloat(destinationLatitude);
       const lng = parseFloat(destinationLongitude);
-      
+
       console.log("Setting destination to:", lat, lng, alertId);
-      
+
       if (!isNaN(lat) && !isNaN(lng)) {
         const newDestination = {
           latitude: lat,
@@ -91,14 +181,13 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
           latitudeDelta: 0.005,
           longitudeDelta: 0.005,
         };
-        
         setDestination(newDestination);
-        
+
         // If we already have the user's location, update the route
         if (origin) {
           getDirections(origin, newDestination);
         }
-        
+
         // Fit the map to show both points if we have origin
         if (origin && mapRef.current) {
           const coordinates = [origin, newDestination];
@@ -108,14 +197,18 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
           });
         }
       } else {
-        console.error("Invalid destination coordinates:", destinationLatitude, destinationLongitude);
+        console.error(
+          "Invalid destination coordinates:",
+          destinationLatitude,
+          destinationLongitude
+        );
       }
     } else {
       console.warn("Missing destination coordinates");
     }
-  }, [destinationLatitude, destinationLongitude]);
+  }, [destinationLatitude, destinationLongitude, origin]);
 
-  // Request location permissions and get initial location
+  // Request location permissions on mount
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -127,104 +220,120 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
         );
         return;
       }
-
-      startLocationTracking();
+      // Only start tracking here if alertId was provided initially
+      if (alertIdRef.current) {
+        startLocationTracking();
+      }
     })();
-    
-    // Clean up on unmount
+
     return () => {
+      // Clean up subscription when component unmounts
       if (locationSubscription) {
         locationSubscription.remove();
       }
     };
   }, []);
 
-  // Verify location updates are being stored correctly
-  useEffect(() => {
-    if (!alertId) return;
-    
-    const interval = setInterval(async () => {
-      try {
-        const { data, error } = await supabase
-          .from('alert')
-          .select('ambulance_latitude, ambulance_longitude, ambulance_last_updated')
-          .eq('id', alertId)
-          .single();
-          
-        if (error) {
-          console.error("Failed to verify location updates:", error);
-          return;
-        }
-        
-        if (data) {
-          const lastUpdateTime = data.ambulance_last_updated ? new Date(data.ambulance_last_updated) : null;
-          const timeSinceUpdate = lastUpdateTime ? (new Date().getTime() - lastUpdateTime.getTime()) / 1000 : null;
-          
-          console.log(`DB ambulance location: (${data.ambulance_latitude}, ${data.ambulance_longitude}), ` +
-                      `last updated: ${timeSinceUpdate ? Math.round(timeSinceUpdate) + 's ago' : 'never'}`);
-        }
-      } catch (err) {
-        console.error("Error verifying location updates:", err);
-      }
-    }, 15000);
-    
-    return () => clearInterval(interval);
-  }, [alertId]);
+  // Periodically verify location updates stored in DB
+  // useEffect(() => {
+  //   if (!alertId) return;
+  //   const interval = setInterval(async () => {
+  //     try {
+  //       const { data, error } = await supabase
+  //         .from("alert")
+  //         .select(
+  //           "ambulance_latitude, ambulance_longitude, ambulance_last_updated"
+  //         )
+  //         .eq("id", alertId)
+  //         .single();
 
-  // Update ambulance location in Supabase with better error handling and rate limiting
-  const updateAmbulanceLocation = async (latitude, longitude) => {
-    // Check if there's a valid alertId before attempting to update
-    const currentAlertId = alertIdRef.current;
-    if (!currentAlertId) {
-      console.log('No valid alert ID available for updating ambulance location');
-      return false;
-    }
-    
-    // Validate coordinates
-    if (typeof latitude !== 'number' || typeof longitude !== 'number' || 
-        isNaN(latitude) || isNaN(longitude)) {
-      console.error('Invalid coordinates:', latitude, longitude);
-      return false;
-    }
-    
-    // Rate limiting - prevent updates too close together
-    const now = Date.now();
-    if (now - lastUpdateTimeRef.current < UPDATE_INTERVAL_MS) {
-      console.log('Skipping update - too soon after last update');
-      return false;
-    }
-  
-    try {
-      console.log(`Updating ambulance location for alert ${currentAlertId}: lat=${latitude}, lng=${longitude}`);
-      
-      const { data, error } = await supabase
-        .from('alert')
-        .update({
-          ambulance_latitude: latitude,
-          ambulance_longitude: longitude,
-          ambulance_last_updated: new Date().toISOString()
-        })
-        .eq('id', currentAlertId);
-  
-      if (error) {
-        console.error('Error updating ambulance location:', error);
-        return false;
-      }
-      
-      // Update successful
-      lastUpdateTimeRef.current = now;
-      console.log('Successfully updated ambulance location in database');
-      return true;
-    } catch (error) {
-      console.error('Exception updating ambulance location:', error);
-      return false;
-    }
-  };
+  //       if (error) {
+  //         console.error("Failed to verify location updates:", error);
+  //         return;
+  //       }
+  //       if (data) {
+  //         const lastUpdateTime = data.ambulance_last_updated
+  //           ? new Date(data.ambulance_last_updated)
+  //           : null;
+  //         const timeSinceUpdate = lastUpdateTime
+  //           ? (new Date().getTime() - lastUpdateTime.getTime()) / 1000
+  //           : null;
+
+  //         console.log(
+  //           `DB ambulance location: (${data.ambulance_latitude}, ${
+  //             data.ambulance_longitude
+  //           }), last updated: ${
+  //             timeSinceUpdate ? Math.round(timeSinceUpdate) + "s ago" : "never"
+  //           }`
+  //         );
+  //       }
+  //     } catch (err) {
+  //       console.error("Error verifying location updates:", err);
+  //     }
+  //   }, 15000);
+
+  //   return () => clearInterval(interval);
+  // }, [alertId]);
+
+  // Update ambulance location in Supabase
+  // const updateAmbulanceLocation = async (
+  //   latitude: number,
+  //   longitude: number
+  // ) => {
+  //   const currentAlertId = alertIdRef.current;
+  //   if (!currentAlertId) {
+  //     console.log(
+  //       "No valid alert ID available for updating ambulance location"
+  //     );
+  //     return false;
+  //   }
+  //   if (typeof latitude !== "number" || typeof longitude !== "number") {
+  //     console.error("Invalid coordinates:", latitude, longitude);
+  //     return false;
+  //   }
+  //   const now = Date.now();
+  //   if (now - lastUpdateTimeRef.current < UPDATE_INTERVAL_MS) {
+  //     console.log("Skipping update - too soon after last update");
+  //     return false;
+  //   }
+  //   // Ensure the status is exactly 'responding'
+  //   if (status !== "responding") {
+  //     console.log(
+  //       `Status is not 'responding' (current: ${status}), skipping DB update`
+  //     );
+  //     return false;
+  //   }
+
+  //   try {
+  //     console.log(
+  //       `Updating ambulance location for alert ${currentAlertId}: lat=${latitude}, lng=${longitude}`
+  //     );
+  //     const { data, error } = await supabase
+  //       .from("alert")
+  //       .update({
+  //         ambulance_latitude: latitude,
+  //         ambulance_longitude: longitude,
+  //         ambulance_last_updated: new Date().toISOString(),
+  //       })
+  //       .eq("id", currentAlertId);
+
+  //     if (error) {
+  //       console.error("Error updating ambulance location:", error);
+  //       return false;
+  //     }
+  //     lastUpdateTimeRef.current = now;
+  //     console.log("Successfully updated ambulance location in database");
+  //     return true;
+  //   } catch (error) {
+  //     console.error("Exception updating ambulance location:", error);
+  //     return false;
+  //   }
+  // };
 
   // Start real-time location tracking
   const startLocationTracking = async () => {
     try {
-      // Get initial location
+      console.log("Starting location tracking for alert:", alertIdRef.current);
       const initialLocation = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
@@ -239,89 +348,78 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
 
       setCurrentLocation(newLocation);
       setOrigin(newLocation);
-      
-      // Update the initial location in Supabase
-      const updated = await updateAmbulanceLocation(latitude, longitude);
-      console.log(`Initial location update ${updated ? 'successful' : 'failed'}`);
 
-      // Subscribe to location updates with some delay to avoid multiple initial updates
+      // const updated = await updateAmbulanceLocation(latitude, longitude);
+      // console.log(
+      //   `Initial location update ${updated ? "successful" : "failed"}`
+      // );
+
+      // Subscribe to location updates
       setTimeout(async () => {
         const subscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Highest,
-            distanceInterval: 10, // Update every 10 meters
-            timeInterval: 5000, // Or every 5 seconds
+            distanceInterval: 10,
+            timeInterval: 5000,
           },
           async (location) => {
             const { latitude, longitude } = location.coords;
-            const newLocation = {
+            const newLoc = {
               latitude,
               longitude,
               latitudeDelta: 0.005,
               longitudeDelta: 0.005,
             };
+            setCurrentLocation(newLoc);
+            setOrigin(newLoc);
 
-            setCurrentLocation(newLocation);
-            setOrigin(newLocation);
-            
-            // Update ambulance location in Supabase
-            const updated = await updateAmbulanceLocation(latitude, longitude);
-            if (!updated) {
-              console.warn("Failed to update ambulance location in database");
-            }
+            // const updated = await updateAmbulanceLocation(latitude, longitude);
+            // if (!updated) {
+            //   console.warn("Failed to update ambulance location in database");
+            // }
 
-            // If following user is enabled, center map on user
             if (followUserLocation && mapRef.current) {
-              mapRef.current.animateToRegion(newLocation, 500);
+              mapRef.current.animateToRegion(newLoc, 500);
             }
 
-            // If the user has moved enough and we have a destination, update the route directions
-            if (destination && shouldUpdateRoute(newLocation)) {
-              getDirections(newLocation, destination);
+            if (destination && shouldUpdateRoute(newLoc)) {
+              getDirections(newLoc, destination);
             }
           }
         );
-
         setLocationSubscription(subscription);
       }, 1000);
     } catch (error) {
       console.error("Error starting location tracking:", error);
       Alert.alert(
-        "Location Error", 
+        "Location Error",
         "Failed to start location tracking. Please check your device settings."
       );
     }
   };
 
-  // Determine if we should update the route based on distance change and time
+  // Decide if we should get new directions
   const shouldUpdateRoute = (newLocation: Location): boolean => {
     if (!origin || routeCoordinates.length === 0) return true;
-
-    // Calculate distance from current origin
     const distance = getDistanceFromLatLonInKm(
       newLocation.latitude,
       newLocation.longitude,
       origin.latitude,
       origin.longitude
     );
-
-    // Get current time
     const currentTime = Date.now();
-
-    // Update the route if:
-    // 1. It's been at least 15 seconds since last update AND
-    // 2. User has moved more than 30 meters
+    // At least 15s since last route fetch AND user moved more than 30m
     return currentTime - lastRouteFetchTime > 15000 && distance > 0.03;
   };
 
-  // Calculate distance between two points
+  // Calculate distance
   const getDistanceFromLatLonInKm = (
     lat1: number,
     lon1: number,
     lat2: number,
     lon2: number
   ): number => {
-    const R = 6371; // Radius of the earth in km
+    const R = 6371;
     const dLat = deg2rad(lat2 - lat1);
     const dLon = deg2rad(lon2 - lon1);
     const a =
@@ -338,20 +436,14 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
     return deg * (Math.PI / 180);
   };
 
-  // Get directions between two points using Google Maps Directions API
+  // Get directions from Google Maps
   const getDirections = async (start: Location, end: Location) => {
     if (!start || !end) return;
-
     try {
       setLoading(true);
-
-      // Record the time of this fetch
       setLastRouteFetchTime(Date.now());
 
-      // Construct the Directions API URL
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
-
-      // Fetch directions data
       const response = await fetch(url);
       const data = await response.json();
 
@@ -359,71 +451,57 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
         throw new Error(`Directions API returned status: ${data.status}`);
       }
 
-      // Parse the response
       const route = data.routes[0];
-
-      // Decode the polyline
       const points = decode(route.overview_polyline.points);
-
-      // Convert to the format expected by react-native-maps
-      const routeCoordinates = points.map((point: [number, number]) => ({
+      const routeCoords = points.map((point: [number, number]) => ({
         latitude: point[0],
         longitude: point[1],
       }));
 
-      setRouteCoordinates(routeCoordinates);
+      setRouteCoordinates(routeCoords);
 
-      // Extract route info
       const leg = route.legs[0];
       setRouteInfo({
         distance: leg.distance.text,
         duration: leg.duration.text,
       });
 
-      // Fit to coordinates if we have a valid route
-      if (mapRef.current && routeCoordinates.length > 0) {
-        mapRef.current.fitToCoordinates(routeCoordinates, {
+      if (mapRef.current && routeCoords.length > 0) {
+        mapRef.current.fitToCoordinates(routeCoords, {
           edgePadding: mapPadding,
           animated: true,
         });
       }
     } catch (error) {
       console.error("Error getting directions:", error);
-
-      // Fallback to the backup method if the API fails
       fallbackDirections(start, end);
     } finally {
       setLoading(false);
     }
   };
 
-  // Fallback to generate a simple path when API fails
+  // Fallback if Google Maps fails
   const fallbackDirections = (start: Location, end: Location) => {
     console.warn("Using fallback directions method");
-
-    // Generate a simple straight line path as fallback
     const points = [
       { latitude: start.latitude, longitude: start.longitude },
       { latitude: end.latitude, longitude: end.longitude },
     ];
-
     setRouteCoordinates(points);
 
-    // Calculate straight-line distance
     const distance = getDistanceFromLatLonInKm(
       start.latitude,
       start.longitude,
       end.latitude,
       end.longitude
     );
-
     setRouteInfo({
       distance: `${distance.toFixed(1)} km (straight line)`,
       duration: `${Math.ceil((distance / 0.5) * 60)} mins (estimate)`,
     });
   };
 
-  // Center map on user's current location
+  // Center map on current location
   const centerOnUser = () => {
     if (currentLocation && mapRef.current) {
       mapRef.current.animateToRegion(currentLocation, 500);
@@ -431,7 +509,7 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
     }
   };
 
-  // Toggle follow user mode
+  // Toggle following user
   const toggleFollowUser = () => {
     setFollowUserLocation(!followUserLocation);
     if (!followUserLocation && currentLocation && mapRef.current) {
@@ -439,15 +517,16 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
     }
   };
 
-  // Calculate route when both origin and destination change
+  // Fetch directions when origin/destination both set
   useEffect(() => {
     if (origin && destination) {
-      console.log("Both origin and destination available, getting directions");
+      console.log(
+        "Both origin and destination available, getting directions..."
+      );
       getDirections(origin, destination);
     }
   }, [origin, destination]);
 
-  // Custom ambulance marker component
   const AmbulanceMarker = () => (
     <View style={styles.markerContainer}>
       <Ionicons
@@ -464,7 +543,6 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
 
   return (
     <View style={styles.container}>
-      {/* Map View */}
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -477,36 +555,29 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
             longitudeDelta: 0.0421,
           }
         }
-        showsUserLocation={false} // Disable default user location dot since we're using custom marker
+        showsUserLocation={false}
         showsMyLocationButton={false}
         showsCompass
         showsScale
         onPanDrag={() => setFollowUserLocation(false)}
         minZoomLevel={5}
         maxZoomLevel={20}
-        zoomEnabled={true}
-        zoomControlEnabled={true}
-        rotateEnabled={true}
-        scrollEnabled={true}
-        pitchEnabled={true}
+        zoomEnabled
+        zoomControlEnabled
+        rotateEnabled
+        scrollEnabled
+        pitchEnabled
       >
-        {/* Custom Ambulance Marker for Current Location */}
         {origin && (
           <Marker coordinate={origin} title="Your Location">
             <AmbulanceMarker />
           </Marker>
         )}
 
-        {/* Destination Marker */}
         {destination && (
-          <Marker 
-            coordinate={destination} 
-            title="Destination" 
-            pinColor="red"
-          />
+          <Marker coordinate={destination} title="Destination" pinColor="red" />
         )}
 
-        {/* Route Polyline */}
         {routeCoordinates.length > 0 && (
           <Polyline
             coordinates={routeCoordinates}
@@ -516,17 +587,17 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
         )}
       </MapView>
 
-      {/* Debugging Info Panel - Can be removed in production */}
       {alertId && (
         <View style={styles.debugInfoContainer}>
-          <Text style={styles.debugText}>Alert ID: {alertId.substring(0, 8)}...</Text>
+          <Text style={styles.debugText}>
+            Alert ID: {alertId.substring(0, 8)}...
+          </Text>
           <Text style={styles.debugText}>
             Updates: {currentLocation ? "Active" : "Waiting..."}
           </Text>
         </View>
       )}
 
-      {/* Route Info */}
       {routeInfo && (
         <View style={styles.routeInfoContainer}>
           <Text style={styles.routeInfoText}>
@@ -538,14 +609,12 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
         </View>
       )}
 
-      {/* Loading Indicator */}
       {loading && (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#4285F4" />
         </View>
       )}
 
-      {/* Map Controls */}
       <View style={styles.mapControls}>
         <TouchableOpacity style={styles.controlButton} onPress={centerOnUser}>
           <Ionicons name="locate" size={24} color="#4285F4" />
@@ -565,12 +634,11 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
           />
         </TouchableOpacity>
 
-        {/* Zoom Controls */}
         <TouchableOpacity
           style={styles.controlButton}
           onPress={() => {
             if (mapRef.current) {
-              const region = mapRef.current.getCamera().then((camera) => {
+              mapRef.current.getCamera().then((camera) => {
                 if (camera) {
                   camera.zoom = (camera.zoom || 15) + 1;
                   mapRef.current?.animateCamera(camera, { duration: 300 });
@@ -586,7 +654,7 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
           style={styles.controlButton}
           onPress={() => {
             if (mapRef.current) {
-              const region = mapRef.current.getCamera().then((camera) => {
+              mapRef.current.getCamera().then((camera) => {
                 if (camera) {
                   camera.zoom = Math.max((camera.zoom || 15) - 1, 5);
                   mapRef.current?.animateCamera(camera, { duration: 300 });
@@ -602,7 +670,6 @@ export default function MapDirections({ destinationLatitude, destinationLongitud
   );
 }
 
-// Styles remain the same
 const styles = StyleSheet.create({
   container: {
     flex: 1,

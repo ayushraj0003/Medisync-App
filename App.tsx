@@ -1,17 +1,21 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
+import { View, Text, StatusBar } from "react-native";
+
+// Import components
 import SOSAudioRecorder from "./src/Transcript";
 import MapDirections from "./src/MapDirections";
 import PatientMap from "./src/PatientMap";
 import HospitalDashboard from "./src/HospitalDashboard";
 import AuthScreen from "./src/auth";
-import { setupNotifications } from "./src/hospitalAlerts";
-import { View, Text, StatusBar } from "react-native";
 import UserDashboard from "./src/UserDashboard";
+import { setupNotifications } from "./src/hospitalAlerts";
+
+// Create navigators
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -22,33 +26,23 @@ const UserTabNavigator = () => {
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
-
-          if (route.name === "SOS") {
-            iconName = focused ? "warning" : "warning-outline";
-          } else if (route.name === "Map") {
-            iconName = focused ? "map" : "map-outline";
-          } else if (route.name === "UserDashboard") {
-            iconName = focused ? "person" : "person-outline";
-          }
-
+          if (route.name === "SOS") iconName = focused ? "warning" : "warning-outline";
+          else if (route.name === "Map") iconName = focused ? "map" : "map-outline";
+          else if (route.name === "UserDashboard") iconName = focused ? "person" : "person-outline";
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: "#FF3B30",
         tabBarInactiveTintColor: "gray",
         headerShown: true,
-        headerStyle: {
-          backgroundColor: "#FF3B30",
-        },
+        headerStyle: { backgroundColor: "#FF3B30" },
         headerTintColor: "#fff",
-        headerTitleStyle: {
-          fontWeight: "bold",
-        },
+        headerTitleStyle: { fontWeight: "bold" },
       })}
     >
       <Tab.Screen name="SOS" component={SOSAudioRecorder} />
       <Tab.Screen
         name="Map"
-        component={PatientMapWrapper}
+        component={EmptyMapScreen}
         options={{ title: "Track Ambulance" }}
       />
       <Tab.Screen
@@ -60,55 +54,20 @@ const UserTabNavigator = () => {
   );
 };
 
-// Create a wrapper for PatientMap to handle alertId
-// Create a wrapper for PatientMap to handle alertId
-const PatientMapWrapper = ({ route }) => {
-  // Check if alertId is available in route params
-  if (!route.params?.alertId) {
-    // Return a component that shows no active alerts
-    console.log("Patient alertId found in route params:", route.params);
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <Text>No active ambulance tracking available.</Text>
-        <Text>Start an emergency alert to track ambulance.</Text>
-      </View>
-    );
+// Simple component for when no alert is active
+const EmptyMapScreen = ({ route }) => {
+  if (route.params?.alertId) {
+    return <PatientMap alertId={route.params.alertId} />;
   }
-
-  // If alertId is available, render the PatientMap
-  return <PatientMap alertId={route.params.alertId} />;
-};
-
-// Create a wrapper component for MapDirections to handle default coordinates
-// In your MapDirectionsWrapper component:
-
-const MapDirectionsWrapper = ({ route }) => {
-  console.log("MapDirectionsWrapper route params:", route?.params);
-
-  // Default coordinates
-  const defaultLatitude = 10.0459501;
-  const defaultLongitude = 76.3291872;
-
-  // Use coordinates from route params if available
-  const destinationLatitude = route?.params?.destinationLatitude || defaultLatitude;
-  const destinationLongitude = route?.params?.destinationLongitude || defaultLongitude;
-
-  // Explicitly extract alertId
-  const alertId = route?.params?.alertId;
-
-  console.log("Passing to MapDirections:", {
-    destinationLatitude,
-    destinationLongitude,
-    alertId,
-  });
-
-  // Make sure this return statement is in your code
+  
   return (
-    <MapDirections
-      destinationLatitude={destinationLatitude}
-      destinationLongitude={destinationLongitude}
-      alertId={alertId}
-    />
+    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <Ionicons name="location-outline" size={64} color="#ccc" />
+      <Text style={{ fontSize: 18, marginTop: 20, fontWeight: "bold" }}>No Active Tracking</Text>
+      <Text style={{ marginTop: 8, textAlign: "center", paddingHorizontal: 40, color: "#666" }}>
+        Start an emergency alert to track ambulance.
+      </Text>
+    </View>
   );
 };
 
@@ -118,32 +77,23 @@ const HospitalTabNavigator = () => {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
-          let iconName;
-
-          if (route.name === "Dashboard") {
-            iconName = focused ? "medical" : "medical-outline";
-          } else if (route.name === "Map") {
-            iconName = focused ? "map" : "map-outline";
-          }
-
+          let iconName = route.name === "Dashboard" 
+            ? (focused ? "medical" : "medical-outline")
+            : (focused ? "map" : "map-outline");
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: "#FF3B30",
         tabBarInactiveTintColor: "gray",
         headerShown: true,
-        headerStyle: {
-          backgroundColor: "#FF3B30",
-        },
+        headerStyle: { backgroundColor: "#FF3B30" },
         headerTintColor: "#fff",
-        headerTitleStyle: {
-          fontWeight: "bold",
-        },
+        headerTitleStyle: { fontWeight: "bold" },
       })}
     >
       <Tab.Screen name="Dashboard" component={HospitalDashboard} />
       <Tab.Screen
         name="HospitalMap"
-        component={MapDirectionsWrapper}
+        component={MapDirections}
         options={{ title: "Emergency Map" }}
       />
     </Tab.Navigator>
@@ -173,61 +123,40 @@ const App = () => {
       Notifications.addNotificationResponseReceivedListener((response) => {
         // Get the data from the notification
         const data = response.notification.request.content.data;
-
         console.log("Notification tapped, data:", data);
 
-        // Check if the notification contains location data
-        if (data && data.coordinates) {
+        // Handle hospital notifications
+        if (data?.coordinates && navigationRef.current) {
           const { latitude, longitude } = data.coordinates;
-          const patientName = data.patientName || "Unknown";
-          const alertId = data.alertId; // Make sure this is captured
-
-          // Use the navigationRef to navigate
-          if (navigationRef.current) {
-            // Navigate to HospitalTabs first
-            navigationRef.current.navigate("HospitalTabs");
-
-            // Then navigate to the Map screen with parameters
-            setTimeout(() => {
-              navigationRef.current.navigate("HospitalTabs", {
-                screen: "HospitalMap",
-                params: {
-                  destinationLatitude: latitude,
-                  destinationLongitude: longitude,
-                  patientName,
-                  alertId: alertId, // Make sure to pass alertId correctly
-                },
-              });
-            }, 100);
-          }
+          const alertId = data.alertId;
+          
+          // Navigate to hospital map with parameters
+          navigationRef.current.navigate("HospitalTabs", {
+            screen: "HospitalMap",
+            params: {
+              destinationLatitude: latitude,
+              destinationLongitude: longitude,
+              alertId: alertId,
+              status: data.status || "responding"
+            }
+          });
         }
 
         // Handle patient notifications (for tracking ambulance)
-        if (data && data.alertId) {
-          const alertId = data.alertId;
-
-          if (navigationRef.current) {
-            // Navigate to user tabs first
-            navigationRef.current.navigate("UserTabs");
-
-            // Then navigate to the Map tab with alertId
-            setTimeout(() => {
-              navigationRef.current.navigate("UserTabs", {
-                screen: "Map",
-                params: {
-                  alertId: alertId, // Make sure to use alertId here
-                },
-              });
-            }, 100);
-          }
+        if (data?.alertId && !data.coordinates && navigationRef.current) {
+          // Navigate to patient map with alertId
+          navigationRef.current.navigate("UserTabs", {
+            screen: "Map",
+            params: {
+              alertId: data.alertId
+            }
+          });
         }
       });
 
     // Cleanup the listeners on unmount
     return () => {
-      Notifications.removeNotificationSubscription(
-        notificationListener.current
-      );
+      Notifications.removeNotificationSubscription(notificationListener.current);
       Notifications.removeNotificationSubscription(responseListener.current);
     };
   }, []);

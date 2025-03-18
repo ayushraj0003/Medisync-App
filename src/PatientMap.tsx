@@ -437,7 +437,7 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
           <Marker 
             coordinate={ambulanceLocation} 
             title="Ambulance"
-            tracksViewChanges={false}
+            // tracksViewChanges={false}
           >
             <AmbulanceMarker />
           </Marker>

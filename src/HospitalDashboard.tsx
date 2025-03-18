@@ -38,7 +38,7 @@ interface EmergencyAlert {
   created_at: string;
   resolved_at: string | null;
   status: string;
-  notification_id: string; // Storing the notification ID for later use
+  notification_id: string; 
 }
 
 const HospitalDashboard = () => {
@@ -264,7 +264,8 @@ const HospitalDashboard = () => {
         navigation.navigate('HospitalMap', {
           destinationLatitude: currentAlert.latitude,
           destinationLongitude: currentAlert.longitude,
-          alertId: alertId
+          alertId: alertId,
+          status: newStatus
         });
       }
   
@@ -346,7 +347,8 @@ const HospitalDashboard = () => {
                 navigation.navigate('HospitalMap', {
                   destinationLatitude: item.latitude,
                   destinationLongitude: item.longitude,
-                  alertId: item.id
+                  alertId: item.id,
+                  status: item.status
                 });
             }}
             >
