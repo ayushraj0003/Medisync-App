@@ -85,38 +85,54 @@ export default function MapDirections(props) {
 
   // Listen for changes in alertId. If a new alertId is passed, reset tracking.
   // Uncomment and modify this effect to use current location
-useEffect(() => {
-  if (alertId && status === "responding" && currentLocation) {
-    // Do a direct update with current location whenever it changes
-    const updateWithCurrentLocation = async () => {
-      try {
-        console.log("Updating with current location:", currentLocation);
+  useEffect(() => {
+    // Only set up a location update listener when status is "responding"
+    if (alertId && status === "responding") {
+      // Reference current location for clean closure handling
+      const updateLocationListener = async () => {
+        if (!currentLocation) return;
         
-        const { data, error } = await supabase
-          .from("alert")
-          .update({
-            ambulance_latitude: currentLocation.latitude,
-            ambulance_longitude: currentLocation.longitude,
-            ambulance_last_updated: new Date().toISOString()
-          })
-          .eq("id", alertId);
+        try {
+          console.log("Status is responding - updating with current location:", currentLocation);
           
-        if (error) {
-          console.error("❌ LOCATION UPDATE FAILED:", error);
-          setUpdateError(error.message);
-        } else {
-          console.log("✅ LOCATION UPDATE SUCCEEDED");
+          const { data, error } = await supabase
+            .from("alert")
+            .update({
+              ambulance_latitude: currentLocation.latitude,
+              ambulance_longitude: currentLocation.longitude,
+              ambulance_last_updated: new Date().toISOString()
+            })
+            .eq("id", alertId);
+            
+          if (error) {
+            console.error("❌ LOCATION UPDATE FAILED:", error);
+            setUpdateError(error.message);
+          } else {
+            console.log("✅ LOCATION UPDATE SUCCEEDED");
+          }
+        } catch (e) {
+          console.error("❌ EXCEPTION IN LOCATION UPDATE:", e);
+          setUpdateError(e.message);
         }
-      } catch (e) {
-        console.error("❌ EXCEPTION IN LOCATION UPDATE:", e);
-        setUpdateError(e.message);
+      };
+      
+      // Only update when both conditions are true and location changes
+      if (currentLocation) {
+        updateLocationListener();
       }
-    };
-    
-    // Update when this effect runs
-    updateWithCurrentLocation();
-  }
-}, [alertId, status, currentLocation]);  // This will run whenever location changes
+      
+      // If status changes to something other than "responding", this effect's cleanup
+      // will run and the listener won't be set up again until status is "responding"
+      return () => {
+        console.log("Stopping location updates because status changed from responding");
+      };
+    } else {
+      // Log when we're not updating due to status
+      if (currentLocation && alertId) {
+        console.log(`Not updating location because status is ${status}, not "responding"`);
+      }
+    }
+  }, [alertId, status, currentLocation]);
 
   // Add this effect to check authentication status
 useEffect(() => {
