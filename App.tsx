@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
-import { View, Text, StatusBar } from "react-native";
+import { View, Text, StatusBar, TouchableOpacity } from "react-native";
 
 // Import components
 import SOSAudioRecorder from "./src/Transcript";
@@ -14,6 +14,11 @@ import HospitalDashboard from "./src/HospitalDashboard";
 import AuthScreen from "./src/auth";
 import UserDashboard from "./src/UserDashboard";
 import { setupNotifications } from "./src/hospitalAlerts";
+import { supabase } from "./src/supabase";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation } from "@react-navigation/native"; 
+
+
 
 // Create navigators
 const Stack = createNativeStackNavigator();
@@ -21,14 +26,18 @@ const Tab = createBottomTabNavigator();
 
 // Create a TabNavigator component for user bottom tabs
 const UserTabNavigator = () => {
+  const navigation = useNavigation();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
-          if (route.name === "SOS") iconName = focused ? "warning" : "warning-outline";
-          else if (route.name === "Map") iconName = focused ? "map" : "map-outline";
-          else if (route.name === "UserDashboard") iconName = focused ? "person" : "person-outline";
+          if (route.name === "EmergencyAlert")
+            iconName = focused ? "warning" : "warning-outline";
+          else if (route.name === "Map")
+            iconName = focused ? "map" : "map-outline";
+          else if (route.name === "UserDashboard")
+            iconName = focused ? "person" : "person-outline";
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: "#FF3B30",
@@ -39,7 +48,33 @@ const UserTabNavigator = () => {
         headerTitleStyle: { fontWeight: "bold" },
       })}
     >
-      <Tab.Screen name="SOS" component={SOSAudioRecorder} />
+      <Tab.Screen
+        name="EmergencyAlert"
+        component={SOSAudioRecorder}
+        options={{
+          title: "Emergency Alert",
+          headerRight: () => (
+            <TouchableOpacity
+              style={{ marginRight: 15 }}
+              onPress={async () => {
+                try {
+                  await supabase.auth.signOut();
+                  await AsyncStorage.removeItem("userProfile");
+
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "Auth" }],
+            });
+                } catch (error) {
+                  console.error("Logout error:", error);
+                }
+              }}
+            >
+              <Ionicons name="log-out-outline" size={24} color="white" />
+            </TouchableOpacity>
+          ),
+        }}
+      />
       <Tab.Screen
         name="Map"
         component={EmptyMapScreen}
@@ -59,12 +94,21 @@ const EmptyMapScreen = ({ route }) => {
   if (route.params?.alertId) {
     return <PatientMap alertId={route.params.alertId} />;
   }
-  
+
   return (
     <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
       <Ionicons name="location-outline" size={64} color="#ccc" />
-      <Text style={{ fontSize: 18, marginTop: 20, fontWeight: "bold" }}>No Active Tracking</Text>
-      <Text style={{ marginTop: 8, textAlign: "center", paddingHorizontal: 40, color: "#666" }}>
+      <Text style={{ fontSize: 18, marginTop: 20, fontWeight: "bold" }}>
+        No Active Tracking
+      </Text>
+      <Text
+        style={{
+          marginTop: 8,
+          textAlign: "center",
+          paddingHorizontal: 40,
+          color: "#666",
+        }}
+      >
         Start an emergency alert to track ambulance.
       </Text>
     </View>
@@ -77,9 +121,14 @@ const HospitalTabNavigator = () => {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
-          let iconName = route.name === "Dashboard" 
-            ? (focused ? "medical" : "medical-outline")
-            : (focused ? "map" : "map-outline");
+          let iconName =
+            route.name === "Dashboard"
+              ? focused
+                ? "medical"
+                : "medical-outline"
+              : focused
+              ? "map"
+              : "map-outline";
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: "#FF3B30",
@@ -129,7 +178,7 @@ const App = () => {
         if (data?.coordinates && navigationRef.current) {
           const { latitude, longitude } = data.coordinates;
           const alertId = data.alertId;
-          
+
           // Navigate to hospital map with parameters
           navigationRef.current.navigate("HospitalTabs", {
             screen: "HospitalMap",
@@ -137,8 +186,8 @@ const App = () => {
               destinationLatitude: latitude,
               destinationLongitude: longitude,
               alertId: alertId,
-              status: data.status || "responding"
-            }
+              status: data.status || "responding",
+            },
           });
         }
 
@@ -148,15 +197,17 @@ const App = () => {
           navigationRef.current.navigate("UserTabs", {
             screen: "Map",
             params: {
-              alertId: data.alertId
-            }
+              alertId: data.alertId,
+            },
           });
         }
       });
 
     // Cleanup the listeners on unmount
     return () => {
-      Notifications.removeNotificationSubscription(notificationListener.current);
+      Notifications.removeNotificationSubscription(
+        notificationListener.current
+      );
       Notifications.removeNotificationSubscription(responseListener.current);
     };
   }, []);
