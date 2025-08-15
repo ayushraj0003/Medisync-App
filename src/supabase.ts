@@ -1,9 +1,20 @@
 // lib/supabase.ts
-// import 'react-native-url-polyfill/auto';
-import { createClient } from '@supabase/supabase-js';
-import { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } from '@env';
+import "react-native-url-polyfill/auto";
+import { createClient } from "@supabase/supabase-js";
 
-console.log("Supabase URL:", NEXT_PUBLIC_SUPABASE_URL);
-console.log("Supabase Key:", NEXT_PUBLIC_SUPABASE_ANON_KEY);
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
 
-export const supabase = createClient(NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY);
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error("Missing Supabase environment variables");
+  console.error("SUPABASE_URL:", supabaseUrl ? "Present" : "Missing");
+  console.error("SUPABASE_ANON_KEY:", supabaseAnonKey ? "Present" : "Missing");
+}
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+});

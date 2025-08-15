@@ -4,7 +4,14 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
-import { View, Text, StatusBar, TouchableOpacity } from "react-native";
+import { View, Text, StatusBar, TouchableOpacity, ActivityIndicator } from "react-native";
+
+// Add structuredClone polyfill for React Native
+if (typeof global.structuredClone === "undefined") {
+  global.structuredClone = (obj) => {
+    return JSON.parse(JSON.stringify(obj));
+  };
+}
 
 // Import components
 import SOSAudioRecorder from "./src/Transcript";
@@ -16,9 +23,8 @@ import UserDashboard from "./src/UserDashboard";
 import { setupNotifications } from "./src/hospitalAlerts";
 import { supabase } from "./src/supabase";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useNavigation } from "@react-navigation/native"; 
-
-
+import { useNavigation } from "@react-navigation/native";
+import ErrorBoundary from "./src/ErrorBoundary";
 
 // Create navigators
 const Stack = createNativeStackNavigator();
@@ -61,10 +67,10 @@ const UserTabNavigator = () => {
                   await supabase.auth.signOut();
                   await AsyncStorage.removeItem("userProfile");
 
-            navigation.reset({
-              index: 0,
-              routes: [{ name: "Auth" }],
-            });
+                  navigation.reset({
+                    index: 0,
+                    routes: [{ name: "Auth" }],
+                  });
                 } catch (error) {
                   console.error("Logout error:", error);
                 }
@@ -150,10 +156,11 @@ const HospitalTabNavigator = () => {
 };
 
 const App = () => {
-  // Reference to navigation
-  const navigationRef = useRef(null);
   const notificationListener = useRef();
   const responseListener = useRef();
+  const navigationRef = useRef(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [initialRoute, setInitialRoute] = React.useState("Auth");
 
   // Initialize notifications when the app starts
   useEffect(() => {
@@ -212,11 +219,57 @@ const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const restoreSession = async () => {
+      try {
+        const sessionJson = await AsyncStorage.getItem("supabaseSession");
+        const profileJson = await AsyncStorage.getItem("userProfile");
+        if (sessionJson && profileJson) {
+          const session = JSON.parse(sessionJson);
+          const profile = JSON.parse(profileJson);
+
+          // Restore session in Supabase
+          await supabase.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+
+          // Set initial route based on account type
+          if (profile.accountType === "user") {
+            setInitialRoute("UserTabs");
+          } else if (profile.accountType === "hospital") {
+            setInitialRoute("HospitalTabs");
+          } else {
+            setInitialRoute("Auth");
+          }
+        } else {
+          setInitialRoute("Auth");
+        }
+      } catch (e) {
+        console.error("Session restore error:", e);
+        setInitialRoute("Auth");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    restoreSession();
+  }, []);
+
+  if (isLoading) {
+    return (
+      <View style={{flex:1, justifyContent:"center", alignItems:"center", backgroundColor:"#fff"}}>
+        <ActivityIndicator size="large" color="#FF3B30" />
+        <Text style={{marginTop: 16, color: "#666"}}>Loading...</Text>
+      </View>
+    );
+  }
+
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar barStyle="light-content" backgroundColor="#FF3B30" />
       <NavigationContainer ref={navigationRef}>
-        <Stack.Navigator initialRouteName="Auth">
+        <Stack.Navigator initialRouteName={initialRoute}>
           <Stack.Screen
             name="Auth"
             component={AuthScreen}
@@ -234,7 +287,7 @@ const App = () => {
           />
         </Stack.Navigator>
       </NavigationContainer>
-    </>
+    </ErrorBoundary>
   );
 };
 

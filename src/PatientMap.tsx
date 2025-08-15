@@ -7,15 +7,13 @@ import {
   ActivityIndicator,
   Dimensions,
   Alert,
+  Platform,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "@mapbox/polyline";
-import { supabase } from "./supabase"; // Import your Supabase client
-import {GOOGLE_MAPS_API_KEY} from "@env";
-
-// You'll need to replace this with your actual Google Maps API key
-// const GOOGLE_MAPS_API_KEY = "";
+import { supabase } from "./supabase";
+import { GOOGLE_MAPS_API_KEY } from "@env";
 
 interface Location {
   latitude: number;
@@ -34,18 +32,13 @@ interface PatientMapViewProps {
 }
 
 export default function PatientMapView({ alertId }: PatientMapViewProps) {
-  // Store alertId in a ref to ensure it's always available in callbacks
-  const alertIdRef = useRef(alertId);
-  
-  // Track the alert's status
+  const alertIdRef = useRef<string | null>(null);
   const [alertStatus, setAlertStatus] = useState<string | null>(null);
-  
-  // Track ambulance assignment status
   const [isAmbulanceAssigned, setIsAmbulanceAssigned] = useState(false);
-  
   const mapRef = useRef<MapView>(null);
   const [patientLocation, setPatientLocation] = useState<Location | null>(null);
   const [ambulanceLocation, setAmbulanceLocation] = useState<Location | null>(null);
+  const [hospitalLocation, setHospitalLocation] = useState<Location | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<Location[]>([]);
   const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,14 +51,56 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
   });
   const [alertDetails, setAlertDetails] = useState<any>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  // Enhanced Google Maps check for development builds
+  useEffect(() => {
+    console.log("=== Google Maps Debug Info ===");
+    console.log("Platform:", Platform.OS);
+    console.log("Build type:", __DEV__ ? "Development" : "Production");
+    console.log("API Key exists:", !!GOOGLE_MAPS_API_KEY);
+    console.log("API Key length:", GOOGLE_MAPS_API_KEY?.length || 0);
+    
+    if (GOOGLE_MAPS_API_KEY) {
+      console.log("API Key prefix:", GOOGLE_MAPS_API_KEY.substring(0, 10) + "...");
+      
+      // Test API key validity
+      fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=test&key=${GOOGLE_MAPS_API_KEY}`)
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === 'REQUEST_DENIED') {
+            console.error("❌ Google Maps API key is invalid or restricted");
+            setMapError("Google Maps API key is invalid or restricted");
+          } else {
+            console.log("✅ Google Maps API key is valid");
+          }
+        })
+        .catch(error => {
+          console.error("❌ Could not validate Google Maps API key:", error);
+        });
+    } else {
+      console.error("❌ Google Maps API key is missing!");
+      setMapError("Google Maps API key is not configured");
+    }
+    
+    // Check if react-native-maps is properly linked
+    try {
+      console.log("MapView component available:", !!MapView);
+      console.log("PROVIDER_GOOGLE available:", !!PROVIDER_GOOGLE);
+    } catch (error) {
+      console.error("react-native-maps import error:", error);
+      setMapError("Map component failed to load");
+    }
+  }, []);
 
   // Log the received props for debugging
   useEffect(() => {
     console.log("PatientMapView received alertId:", alertId);
-    
+
     // Update the ref whenever alertId changes
     alertIdRef.current = alertId;
-    
+
     // Log warning if alertId is missing
     if (!alertId) {
       console.warn("No alertId provided - cannot track ambulance");
@@ -78,13 +113,13 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
       setLoading(false);
       return;
     }
-    
+
     // Initial fetch of the alert data
     const fetchAlertData = async () => {
       try {
         setLoading(true);
         console.log("Fetching alert data for ID:", alertId);
-        
+
         const { data, error } = await supabase
           .from("alert")
           .select("*")
@@ -100,12 +135,14 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
         if (data) {
           console.log("Alert data received:", {
             status: data.status,
-            has_ambulance: Boolean(data.ambulance_latitude && data.ambulance_longitude)
+            has_ambulance: Boolean(
+              data.ambulance_latitude && data.ambulance_longitude
+            ),
           });
-          
+
           setAlertDetails(data);
           setAlertStatus(data.status);
-          
+
           // Set patient location from alert data
           if (data.latitude && data.longitude) {
             const patientLoc = {
@@ -118,11 +155,11 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
           } else {
             console.warn("Alert has no patient location coordinates");
           }
-          
+
           // Set ambulance location if available
           if (data.ambulance_latitude && data.ambulance_longitude) {
             setIsAmbulanceAssigned(true);
-            
+
             const ambulanceLoc = {
               latitude: data.ambulance_latitude,
               longitude: data.ambulance_longitude,
@@ -130,21 +167,44 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
               longitudeDelta: 0.005,
             };
             setAmbulanceLocation(ambulanceLoc);
-            
+
             if (data.ambulance_last_updated) {
               setLastUpdated(new Date(data.ambulance_last_updated));
             }
-            
+
             // Calculate route if both locations are available
             if (data.latitude && data.longitude) {
               getDirections(ambulanceLoc, {
                 latitude: data.latitude,
-                longitude: data.longitude
+                longitude: data.longitude,
               });
             }
           } else {
             setIsAmbulanceAssigned(false);
             console.log("No ambulance assigned yet");
+          }
+
+          if (data.hospitalid) {
+            // Fetch hospital location from hospitals table
+            const { data: hospitalData, error: hospitalError } = await supabase
+              .from("hospitals")
+              .select("latitude, longitude, name")
+              .eq("id", data.hospitalid)
+              .single();
+
+            if (!hospitalError && hospitalData && hospitalData.latitude && hospitalData.longitude) {
+              setHospitalLocation({
+                latitude: hospitalData.latitude,
+                longitude: hospitalData.longitude,
+                latitudeDelta: 0.005,
+                longitudeDelta: 0.005,
+                name: hospitalData.name,
+              });
+            } else {
+              setHospitalLocation(null);
+            }
+          } else {
+            setHospitalLocation(null);
           }
         } else {
           console.warn("No alert data found for ID:", alertId);
@@ -160,7 +220,7 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
     // Subscribe to real-time updates for this alert
     console.log("Setting up real-time subscription for alert:", alertId);
-    
+
     const subscription = supabase
       .channel(`patient-alert:${alertId}`)
       .on(
@@ -177,18 +237,17 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
             ambulance_lng: payload.new.ambulance_longitude,
             status: payload.new.status,
           });
-          
+
           const updatedAlert = payload.new;
           setAlertDetails(updatedAlert);
           setAlertStatus(updatedAlert.status);
-          
+
           // Update ambulance assignment status
-          const hasAmbulanceLocation = 
-            updatedAlert.ambulance_latitude && 
-            updatedAlert.ambulance_longitude;
-            
+          const hasAmbulanceLocation =
+            updatedAlert.ambulance_latitude && updatedAlert.ambulance_longitude;
+
           setIsAmbulanceAssigned(hasAmbulanceLocation);
-          
+
           // Update ambulance location if available
           if (hasAmbulanceLocation) {
             const newAmbulanceLocation = {
@@ -198,11 +257,11 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
               longitudeDelta: 0.005,
             };
             setAmbulanceLocation(newAmbulanceLocation);
-            
+
             if (updatedAlert.ambulance_last_updated) {
               setLastUpdated(new Date(updatedAlert.ambulance_last_updated));
             }
-            
+
             // Update route if patient location is available
             if (patientLocation) {
               getDirections(newAmbulanceLocation, patientLocation);
@@ -233,7 +292,7 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
         console.log("Skipping route update - too soon after last update");
         return;
       }
-      
+
       setLastRouteFetchTime(currentTime);
       console.log("Getting directions from ambulance to patient");
 
@@ -271,17 +330,14 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
       // Fit map to show both markers and the route
       if (mapRef.current && routeCoordinates.length > 0) {
-        mapRef.current.fitToCoordinates(
-          [start, end],
-          {
-            edgePadding: mapPadding,
-            animated: true,
-          }
-        );
+        mapRef.current.fitToCoordinates([start, end], {
+          edgePadding: mapPadding,
+          animated: true,
+        });
       }
     } catch (error) {
       console.error("Error getting directions:", error);
-      
+
       // Fallback to simple straight line if API fails
       console.log("Using fallback straight line path");
       const points = [
@@ -289,7 +345,7 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
         { latitude: end.latitude, longitude: end.longitude },
       ];
       setRouteCoordinates(points);
-      
+
       // Calculate straight-line distance
       const distance = getDistanceFromLatLonInKm(
         start.latitude,
@@ -355,23 +411,26 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
         });
       } else if (patientLocation) {
         // If only patient location exists, center on it
-        mapRef.current.animateToRegion({
-          ...patientLocation,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01
-        }, 500);
+        mapRef.current.animateToRegion(
+          {
+            ...patientLocation,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          },
+          500
+        );
       }
     }
   };
-  
+
   // Format time difference for user-friendly display
   const getTimeSinceUpdate = () => {
     if (!lastUpdated) return "N/A";
-    
+
     const now = new Date();
     const diffMs = now.getTime() - lastUpdated.getTime();
     const diffSecs = Math.floor(diffMs / 1000);
-    
+
     if (diffSecs < 60) {
       return `${diffSecs} seconds ago`;
     } else if (diffSecs < 3600) {
@@ -381,6 +440,49 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
     }
   };
 
+  // Handle map errors
+  const handleMapError = (error: any) => {
+    console.error("=== Map Error Details ===");
+    console.error("Error object:", error);
+    console.error("Error message:", error?.message);
+    console.error("Error stack:", error?.stack);
+    
+    const errorMessage = error?.message || error?.toString() || "Unknown map error";
+    setMapError(`Map failed to load: ${errorMessage}`);
+  };
+
+  // Map ready handler
+  const handleMapReady = () => {
+    console.log("✅ Map is ready!");
+    setMapReady(true);
+    setMapError(null);
+  };
+
+  // Show error state if map fails
+  if (mapError) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle" size={64} color="#FF3B30" />
+        <Text style={styles.errorTitle}>Map Error</Text>
+        <Text style={styles.errorText}>{mapError}</Text>
+        <Text style={styles.debugText}>
+          Platform: {Platform.OS}
+          {"\n"}API Key: {GOOGLE_MAPS_API_KEY ? "Present" : "Missing"}
+          {"\n"}Build: Development
+        </Text>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={() => {
+            setMapError(null);
+            setMapReady(false);
+          }}
+        >
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -389,8 +491,7 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
       </View>
     );
   }
-  
-  // Check if alertId is missing
+
   if (!alertId) {
     return (
       <View style={styles.errorContainer}>
@@ -405,46 +506,79 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
   return (
     <View style={styles.container}>
-      {/* Map View */}
+      {/* Map loading overlay */}
+      {!mapReady && (
+        <View style={styles.mapLoadingOverlay}>
+          <ActivityIndicator size="large" color="#4285F4" />
+          <Text style={styles.mapLoadingText}>Loading map...</Text>
+          <Text style={styles.debugText}>
+            Build: {__DEV__ ? "Development" : "Production"}
+            {"\n"}Provider: {Platform.OS === 'android' ? 'Google' : 'Apple'}
+          </Text>
+        </View>
+      )}
+
+      {/* Map View with enhanced configuration for development builds */}
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_GOOGLE}
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+        onMapReady={handleMapReady}
+        onError={handleMapError}
         initialRegion={
           patientLocation || {
-            latitude: 37.78825,
-            longitude: -122.4324,
+            latitude: 28.6139, // Delhi coordinates as fallback
+            longitude: 77.2090,
             latitudeDelta: 0.0922,
             longitudeDelta: 0.0421,
           }
         }
         showsUserLocation={false}
         showsMyLocationButton={false}
-        showsCompass
-        showsScale
+        showsCompass={true}
+        showsScale={true}
+        loadingEnabled={true}
+        loadingIndicatorColor="#4285F4"
+        loadingBackgroundColor="#ffffff"
+        // Development build specific props
+        mapType="standard"
+        showsBuildings={true}
+        showsTraffic={false}
+        showsIndoors={false}
       >
         {/* Patient Marker */}
-        {patientLocation && (
-          <Marker 
-            coordinate={patientLocation} 
-            title="Your Location" 
+        {patientLocation && mapReady && (
+          <Marker
+            coordinate={patientLocation}
+            title="Your Location"
             pinColor="blue"
           />
         )}
 
         {/* Ambulance Marker */}
-        {ambulanceLocation && isAmbulanceAssigned && (
-          <Marker 
-            coordinate={ambulanceLocation} 
+        {ambulanceLocation && isAmbulanceAssigned && mapReady && (
+          <Marker
+            coordinate={ambulanceLocation}
             title="Ambulance"
-            // tracksViewChanges={false}
+            tracksViewChanges={false}
           >
             <AmbulanceMarker />
           </Marker>
         )}
 
+        {/* Hospital Marker */}
+        {hospitalLocation && mapReady && (
+          <Marker
+            coordinate={hospitalLocation}
+            title={hospitalLocation.name ? hospitalLocation.name : "Responding Hospital"}
+            pinColor="green"
+          >
+            <Ionicons name="medkit" size={28} color="#2ecc40" />
+          </Marker>
+        )}
+
         {/* Route Polyline */}
-        {routeCoordinates.length > 0 && isAmbulanceAssigned && (
+        {routeCoordinates.length > 0 && isAmbulanceAssigned && mapReady && (
           <Polyline
             coordinates={routeCoordinates}
             strokeWidth={5}
@@ -456,9 +590,10 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
       {/* Status Box */}
       <View style={styles.statusContainer}>
         <Text style={styles.statusTitle}>
-          Emergency Status: {alertStatus ? alertStatus.toUpperCase() : "UNKNOWN"}
+          Emergency Status:{" "}
+          {alertStatus ? alertStatus.toUpperCase() : "UNKNOWN"}
         </Text>
-        
+
         {isAmbulanceAssigned ? (
           <>
             <Text style={styles.statusText}>Ambulance is on the way!</Text>
@@ -478,20 +613,24 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
           </>
         ) : (
           <View style={styles.waitingContainer}>
-            <ActivityIndicator size="small" color="#FF3B30" style={styles.spinner} />
+            <ActivityIndicator
+              size="small"
+              color="#FF3B30"
+              style={styles.spinner}
+            />
             <View style={styles.waitingTextContainer}>
               <Text style={styles.waitingText}>
                 Waiting for ambulance to be dispatched...
               </Text>
               <Text style={styles.waitingSubtext}>
-                {alertStatus === 'responding' 
-                  ? 'Hospital is responding to your emergency'
-                  : 'Your alert has been sent to nearby hospitals'}
+                {alertStatus === "responding"
+                  ? "Hospital is responding to your emergency"
+                  : "Your alert has been sent to nearby hospitals"}
               </Text>
             </View>
           </View>
         )}
-        
+
         {alertId && (
           <View style={styles.alertIDContainer}>
             <Text style={styles.alertIDText}>
@@ -503,7 +642,10 @@ export default function PatientMapView({ alertId }: PatientMapViewProps) {
 
       {/* Map Controls */}
       <View style={styles.mapControls}>
-        <TouchableOpacity style={styles.controlButton} onPress={fitMapToMarkers}>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={fitMapToMarkers}
+        >
           <Ionicons name="locate" size={24} color="#4285F4" />
         </TouchableOpacity>
       </View>
@@ -645,5 +787,33 @@ const styles = StyleSheet.create({
     backgroundColor: "red",
     borderRadius: 10,
     padding: 2,
+  },
+  debugText: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 10,
+    textAlign: "center",
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  retryButtonText: {
+    color: "#4285F4",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  mapLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1000,
+  },
+  mapLoadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: "#4285F4",
   },
 });

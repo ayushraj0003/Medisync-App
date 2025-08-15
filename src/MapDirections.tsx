@@ -91,19 +91,22 @@ export default function MapDirections(props) {
       // Reference current location for clean closure handling
       const updateLocationListener = async () => {
         if (!currentLocation) return;
-        
+
         try {
-          console.log("Status is responding - updating with current location:", currentLocation);
-          
+          console.log(
+            "Status is responding - updating with current location:",
+            currentLocation
+          );
+
           const { data, error } = await supabase
             .from("alert")
             .update({
               ambulance_latitude: currentLocation.latitude,
               ambulance_longitude: currentLocation.longitude,
-              ambulance_last_updated: new Date().toISOString()
+              ambulance_last_updated: new Date().toISOString(),
             })
             .eq("id", alertId);
-            
+
           if (error) {
             console.error("❌ LOCATION UPDATE FAILED:", error);
             setUpdateError(error.message);
@@ -115,42 +118,46 @@ export default function MapDirections(props) {
           setUpdateError(e.message);
         }
       };
-      
+
       // Only update when both conditions are true and location changes
       if (currentLocation) {
         updateLocationListener();
       }
-      
+
       // If status changes to something other than "responding", this effect's cleanup
       // will run and the listener won't be set up again until status is "responding"
       return () => {
-        console.log("Stopping location updates because status changed from responding");
+        console.log(
+          "Stopping location updates because status changed from responding"
+        );
       };
     } else {
       // Log when we're not updating due to status
       if (currentLocation && alertId) {
-        console.log(`Not updating location because status is ${status}, not "responding"`);
+        console.log(
+          `Not updating location because status is ${status}, not "responding"`
+        );
       }
     }
   }, [alertId, status, currentLocation]);
 
   // Add this effect to check authentication status
-useEffect(() => {
-  const checkAuth = async () => {
-    const { data, error } = await supabase.auth.getSession();
-    
-    if (error) {
-      console.error("❌ AUTH ERROR:", error);
-      setUpdateError(`Auth error: ${error.message}`);
-    } else if (!data.session) {
-      console.warn("⚠️ NO AUTH SESSION - updates might be rejected");
-    } else {
-      console.log("✅ AUTH SESSION VALID:", data.session.user?.id);
-    }
-  };
-  
-  checkAuth();
-}, []);
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.error("❌ AUTH ERROR:", error);
+        setUpdateError(`Auth error: ${error.message}`);
+      } else if (!data.session) {
+        console.warn("⚠️ NO AUTH SESSION - updates might be rejected");
+      } else {
+        console.log("✅ AUTH SESSION VALID:", data.session.user?.id);
+      }
+    };
+
+    checkAuth();
+  }, []);
 
   useEffect(() => {
     if (!alertId) {
@@ -557,12 +564,62 @@ useEffect(() => {
     </View>
   );
 
+  const [mapError, setMapError] = useState(null);
+
+  // Add this effect to check Google Maps availability
+  useEffect(() => {
+    const checkGoogleMaps = async () => {
+      try {
+        // Test if Google Maps is available
+        console.log("Checking Google Maps availability...");
+
+        if (!GOOGLE_MAPS_API_KEY) {
+          setMapError("Google Maps API key is missing");
+          return;
+        }
+
+        console.log("Google Maps API key found");
+      } catch (error) {
+        console.error("Google Maps check failed:", error);
+        setMapError("Google Maps initialization failed");
+      }
+    };
+
+    checkGoogleMaps();
+  }, []);
+
+  // Handle map errors
+  const handleMapError = (error) => {
+    console.error("Map error:", error);
+    setMapError(error.message || "Map failed to load");
+  };
+
+  if (mapError) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Map Error: {mapError}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => {
+              setMapError(null);
+              // Retry initialization
+            }}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <MapView
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
+        onError={handleMapError}
         initialRegion={
           currentLocation || {
             latitude: 37.78825,
@@ -686,6 +743,7 @@ useEffect(() => {
   );
 }
 
+// Add error styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -784,5 +842,28 @@ const styles = StyleSheet.create({
   debugText: {
     color: "white",
     fontSize: 10,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    color: "#FF3B30",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
   },
 });

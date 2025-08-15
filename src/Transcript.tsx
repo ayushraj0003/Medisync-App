@@ -18,7 +18,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai"; // Import Gemini API
 import * as Location from "expo-location";
 import { GEMINI_API_KEY, ASSEMBLY_AI_API_KEY } from "@env"; // Import API keys from .env file
 import { sendSOSAlerts } from "./hospitalAlerts";
-import { useNavigation } from "@react-navigation/native"; // Import for tion
+import { useNavigation } from "@react-navigation/native"; // Import for navigation
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -318,6 +318,43 @@ const analyzeWithGemini = async (transcription, location) => {
         location.longitude
       );
 
+      // Generate first aid suggestions based on the incident
+      try {
+        console.log(
+          "Attempting to generate first aid suggestions for:",
+          jsonResponse["Type of incident"]
+        );
+        const firstAidSuggestions = await generateFirstAidSuggestions(
+          jsonResponse["Type of incident"],
+          jsonResponse["Medical conditions mentioned"]
+        );
+
+        console.log(
+          "Successfully generated suggestions, length:",
+          firstAidSuggestions?.length || 0
+        );
+
+        // Save the alert ID with the suggestions for easy retrieval
+        if (data && data[0] && data[0].id) {
+          await AsyncStorage.setItem("lastAlertId", data[0].id);
+          await AsyncStorage.setItem(
+            "lastAlertSuggestions",
+            firstAidSuggestions
+          );
+          console.log(
+            "Saved suggestions to AsyncStorage with alert ID:",
+            data[0].id
+          );
+        } else {
+          console.error("No alert ID available to save suggestions");
+        }
+      } catch (error) {
+        console.error(
+          "Error generating or saving first aid suggestions:",
+          error
+        );
+      }
+
       // Create a message that includes both alert and hospital information
       const alertMessage = `Emergency alert has been recorded with priority: ${
         jsonResponse["Priority status"]
@@ -341,6 +378,75 @@ const analyzeWithGemini = async (transcription, location) => {
   } catch (error) {
     console.error("Error in analyzeWithGemini:", error);
     Alert.alert("Error", "Failed to analyze and save alert");
+  }
+};
+
+// Add this function after analyzeWithGemini
+// In the generateFirstAidSuggestions function
+const generateFirstAidSuggestions = async (incidentType, medicalConditions) => {
+  try {
+    console.log("Generating first aid suggestions for:", incidentType);
+
+    // Create a prompt for Gemini to generate first aid suggestions
+    const suggestionPrompt = `
+Generate practical, step-by-step first aid advice for someone experiencing the following medical situation while waiting for an ambulance. Be concise but thorough.
+
+Medical situation: ${incidentType || "Medical emergency"}
+${medicalConditions ? `Medical conditions: ${medicalConditions}` : ""}
+
+Format your response as:
+1. What to do immediately
+2. Key actions to take while waiting
+3. What NOT to do
+4. Signs to monitor
+5. How to prepare for ambulance arrival
+
+Keep instructions clear, simple, and life-saving focused. Avoid excessive medical jargon. Focus on the most important actions a non-medical person can take.
+`;
+
+    const suggestionResult = await model.generateContent(suggestionPrompt);
+    const suggestions = suggestionResult.response.text();
+
+    console.log("First aid suggestions generated, length:", suggestions.length);
+
+    // Store using BOTH keys for backward compatibility
+    await AsyncStorage.setItem("firstAidSuggestions", suggestions);
+    await AsyncStorage.setItem("lastAlertSuggestions", suggestions);
+
+    return suggestions;
+  } catch (error) {
+    console.error("Error generating first aid suggestions:", error);
+    const fallbackSuggestions = `
+1. What to do immediately:
+- Keep the person calm and still
+- Call for professional medical help if not already done
+- Check their breathing and pulse
+
+2. Key actions to take while waiting:
+- Monitor vital signs regularly
+- Keep the person comfortable
+- Don't give food or drink
+
+3. What NOT to do:
+- Don't move the person unless absolutely necessary
+- Don't give medications without medical advice
+- Don't leave the person alone
+
+4. Signs to monitor:
+- Level of consciousness
+- Breathing pattern
+- Pulse rate
+- Skin color and temperature
+
+5. How to prepare for ambulance arrival:
+- Have someone ready to direct paramedics
+- Gather any medication information
+- Keep the path clear for stretcher access
+`;
+    // Save fallback suggestions
+    await AsyncStorage.setItem("lastAlertSuggestions", fallbackSuggestions);
+    await AsyncStorage.setItem("firstAidSuggestions", fallbackSuggestions);
+    return fallbackSuggestions;
   }
 };
 
